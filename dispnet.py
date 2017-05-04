@@ -1,11 +1,41 @@
 import tensorflow as tf
 from util import readPFM
 import numpy as np
+import os
 
 LEAKY_ALPHA = 0.1
 MAX_DISP=40
 
 initializer = tf.contrib.layers.xavier_initializer_conv2d(uniform=False)
+
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+shift_corr_module = tf.load_op_library(os.path.join(REPO_DIR, 'user_ops/shift_corr.so'))
+
+def correlation(x, y, max_disp):
+    x = tf.pad(x, [[0, 0], [0, 0], [max_disp, max_disp], [0, 0]], "CONSTANT")
+    y = tf.pad(y, [[0, 0], [0, 0], [max_disp, max_disp], [0, 0]], "CONSTANT")
+    corr = shift_corr_module.shift_corr(x, y, max_disp=max_disp)
+
+    @tf.RegisterGradient("ShiftCorr")
+    def _ShiftCorrOpGrad(op, grad):
+        return shift_corr_module.shift_corr_grad(op.inputs[0], op.inputs[1], grad, max_disp=max_disp)
+
+    return tf.transpose(corr, perm=[0, 2, 3, 1])
+
+def correlation_map(x, y, max_disp):
+    corr_tensors = []
+    for i in range(-max_disp, 0, 1):
+        shifted = tf.pad(tf.slice(y, [0, 0, -i, 0], [-1]*4),
+                                  [[0, 0], [0, 0], [-i, 0], [0, 0]], "CONSTANT")
+        corr = tf.reduce_mean(tf.multiply(shifted, y), axis=3)
+        corr_tensors.append(corr)
+    for i in range(max_disp + 1):
+        shifted = tf.pad(tf.slice(y, [0]*4, [-1, -1, y.shape[2].value - i, -1]),
+                                  [[0, 0], [0, 0], [0, i], [0, 0]], "CONSTANT")
+        corr = tf.reduce_mean(tf.multiply(shifted, y), axis=3)
+        corr_tensors.append(corr)
+    return tf.transpose(tf.stack(corr_tensors),
+                        perm=[1,2,3,0])
 
 def preprocess(left_img, right_img, target, orig_size, input_size):
     left_img = tf.image.convert_image_dtype(left_img, tf.float32)
@@ -43,21 +73,6 @@ def input_pipeline(filenames, orig_size, input_size, batch_size, num_epochs=None
         [left_img, right_img, target], batch_size=batch_size, capacity=capacity,
         min_after_dequeue=min_after_dequeue)
     return left_img_batch, right_img_batch, target_batch
-
-def correlation_map(x, y, max_disp):
-    corr_tensors = []
-    for i in range(-max_disp, 0, 1):
-        shifted = tf.pad(tf.slice(y, [0, 0, -i, 0], [-1]*4),
-                                  [[0, 0], [0, 0], [-i, 0], [0, 0]], "CONSTANT")
-        corr = tf.reduce_mean(tf.multiply(shifted, y), axis=3)
-        corr_tensors.append(corr)
-    for i in range(max_disp + 1):
-        shifted = tf.pad(tf.slice(y, [0]*4, [-1, -1, y.shape[2].value - i, -1]),
-                                  [[0, 0], [0, 0], [0, i], [0, 0]], "CONSTANT")
-        corr = tf.reduce_mean(tf.multiply(shifted, y), axis=3)
-        corr_tensors.append(corr)
-    return tf.transpose(tf.stack(corr_tensors),
-                        perm=[1,2,3,0])
 
 def conv2d(x, kernel_shape, strides=1, relu=True, padding='SAME'):
     W = tf.get_variable("weights", kernel_shape, initializer=initializer)

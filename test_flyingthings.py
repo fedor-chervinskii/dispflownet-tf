@@ -33,9 +33,11 @@ if __name__ == '__main__':
             metavar="FILE", help='model checkpoint path')
     parser.add_argument("-l", "--log_step", dest="log_step", type=int, default=100,
             help='log step size')
+    parser.add_argument("-n", "--n_steps", dest="n_steps", type=int, default=None,
+            help='test steps')
 
     args = parser.parse_args()
-
+    
     tf.reset_default_graph()
 
     graph = tf.Graph()
@@ -47,7 +49,10 @@ if __name__ == '__main__':
     
     ft3d_samples_filenames = ft3d_filenames(args.dataset_path)
 
-    N_test = len(ft3d_samples_filenames["TEST"])
+    if args.n_steps is None:
+        N_test = len(ft3d_samples_filenames["TEST"])
+    else:
+        N_test = args.n_steps
 
     with graph.as_default():
 
