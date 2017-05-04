@@ -6,7 +6,7 @@ Currently DispNetCorr1D is implemented and converges in experiments.
 
 Model | FlyingThings3D EPE | FPS (K40)
 -------|-----|-------
-DispNetCorr1D (slow) | ~3 | 5
+DispNetCorr1D (slow) | 3.4 | 5
 
 ## Correlation Layer
 
