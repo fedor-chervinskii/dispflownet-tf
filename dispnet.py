@@ -76,6 +76,7 @@ def input_pipeline(filenames, orig_size, input_size, batch_size, num_epochs=None
 
 def conv2d(x, kernel_shape, strides=1, relu=True, padding='SAME'):
     W = tf.get_variable("weights", kernel_shape, initializer=initializer)
+    tf.add_to_collection(tf.GraphKeys.WEIGHTS, W)
     b = tf.get_variable("biases", kernel_shape[3], initializer=tf.constant_initializer(0.0))
     with tf.name_scope("conv"):
         x = tf.nn.conv2d(x, W, strides=[1, strides, strides, 1], padding=padding)
@@ -93,6 +94,7 @@ def conv2d(x, kernel_shape, strides=1, relu=True, padding='SAME'):
 
 def conv2d_transpose(x, kernel_shape, strides=1, relu=True):
     W = tf.get_variable("weights", kernel_shape, initializer=initializer)
+    tf.add_to_collection(tf.GraphKeys.WEIGHTS, W)
     b = tf.get_variable("biases", kernel_shape[2], initializer=tf.constant_initializer(0.0))
     output_shape = [x.get_shape()[0].value,
                     x.get_shape()[1].value*strides, x.get_shape()[2].value*strides, kernel_shape[2]]
@@ -166,8 +168,9 @@ def build_main_graph(left_image_batch, right_image_batch):
 def L1_loss(x, y):
     return tf.reduce_mean(tf.abs(x - y))
 
-def build_loss(predictions, target, loss_weights):
+def build_loss(predictions, target, loss_weights, weight_decay):
     height, width = target.get_shape()[1].value, target.get_shape()[2].value
+    regularizer = tf.contrib.layers.l2_regularizer(weight_decay)
     with tf.name_scope("loss"):
         targets = [tf.image.resize_nearest_neighbor(target, [height / np.power(2, n),
                                                          width / np.power(2, n)])
@@ -177,6 +180,8 @@ def build_loss(predictions, target, loss_weights):
             tf.summary.scalar('loss' + str(i), losses[i])
             tf.summary.scalar('loss_weight' + str(i), loss_weights[i])
         loss = tf.add_n([losses[i]*loss_weights[i] for i in range(6)])
+        reg_loss = tf.contrib.layers.apply_regularization(regularizer)
+        total_loss = loss + reg_loss
         tf.summary.scalar('loss', loss)
         error = losses[0]
-        return loss, error
+        return total_loss, loss, error
