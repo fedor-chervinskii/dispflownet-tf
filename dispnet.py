@@ -5,6 +5,7 @@ import os
 
 LEAKY_ALPHA = 0.1
 MAX_DISP=40
+MEAN_VALUE = 100.
 
 initializer = tf.contrib.layers.xavier_initializer_conv2d(uniform=False)
 
@@ -25,12 +26,12 @@ def correlation(x, y, max_disp):
 def correlation_map(x, y, max_disp):
     corr_tensors = []
     for i in range(-max_disp, 0, 1):
-        shifted = tf.pad(tf.slice(y, [0, 0, -i, 0], [-1]*4),
+        shifted = tf.pad(tf.slice(y, [0]*4, [-1, -1, y.shape[2].value + i, -1]),
                                   [[0, 0], [0, 0], [-i, 0], [0, 0]], "CONSTANT")
-        corr = tf.reduce_mean(tf.multiply(shifted, y), axis=3)
+        corr = tf.reduce_mean(tf.multiply(shifted, x), axis=3)
         corr_tensors.append(corr)
     for i in range(max_disp + 1):
-        shifted = tf.pad(tf.slice(y, [0]*4, [-1, -1, y.shape[2].value - i, -1]),
+        shifted = tf.pad(tf.slice(x, [0, 0, i, 0], [-1]*4),
                                   [[0, 0], [0, 0], [0, i], [0, 0]], "CONSTANT")
         corr = tf.reduce_mean(tf.multiply(shifted, y), axis=3)
         corr_tensors.append(corr)
@@ -39,7 +40,7 @@ def correlation_map(x, y, max_disp):
 
 def preprocess(left_img, right_img, target, orig_size, input_size):
     left_img = tf.image.convert_image_dtype(left_img, tf.float32)
-    mean = tf.reduce_mean(left_img)
+    mean = MEAN_VALUE #tf.reduce_mean(left_img)
     orig_width = orig_size[1]
     width, height, n_channels = input_size
     left_img = left_img - mean

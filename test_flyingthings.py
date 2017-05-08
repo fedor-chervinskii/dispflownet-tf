@@ -59,6 +59,7 @@ if __name__ == '__main__':
         loss_weights = tf.placeholder(tf.float32, shape=(6),
                                       name="loss_weights")
         learning_rate = tf.placeholder(tf.float32, shape=(), name="learning_rate")
+        weight_decay = tf.placeholder_with_default(shape=(), name="weight_decay", input=0.0004)
         beta1 = tf.placeholder_with_default(shape=(), name="beta1", input=0.9)
         beta2 = tf.placeholder_with_default(shape=(), name="beta2", input=0.99)
 
@@ -75,10 +76,10 @@ if __name__ == '__main__':
                                                               lambda: val_pipeline)    
 
         predictions = dispnet.build_main_graph(left_image_batch, right_image_batch)
-        loss, error = dispnet.build_loss(predictions, target, loss_weights)
+        total_loss, loss, error = dispnet.build_loss(predictions, target, loss_weights, weight_decay)
 
         optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, beta1=beta1, beta2=beta2)
-        train_step = optimizer.minimize(loss)
+        train_step = optimizer.minimize(total_loss)
 
         init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
 
