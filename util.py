@@ -1,6 +1,9 @@
 import re
 import os
+import sys
 import glob
+import logging
+import datetime
 import numpy as np
 
 def readPFM(file):
@@ -54,3 +57,16 @@ def ft3d_filenames(path):
                                            right_images_filenames[i],
                                            disparity_filenames[i]) for i in range(len(left_images_filenames))]
     return ft3d_samples_filenames
+
+def init_logger(log_path, name="dispnet"):
+    root = logging.getLogger()
+    root.setLevel(logging.NOTSET)
+    logfile = os.path.join(log_path, "%s-%s.log" % (name, datetime.datetime.today()))
+    fileHandler = logging.FileHandler(logfile)
+    fileHandler.setLevel(logging.INFO)
+    root.addHandler(fileHandler)
+    consoleHandler = logging.StreamHandler(sys.stdout)
+    consoleHandler.setLevel(logging.DEBUG)
+    consoleHandler.terminator = ""
+    root.addHandler(consoleHandler)
+    logging.debug("Logging to %s" % logfile)

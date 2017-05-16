@@ -45,8 +45,9 @@ def correlation_map(x, y, max_disp):
 
 def preprocess(left_img, right_img, target, input_size):
     left_img = tf.image.convert_image_dtype(left_img, tf.float32)
-    mean = MEAN_VALUE  # tf.reduce_mean(left_img)
-    width, height, n_channels = input_size
+    mean = MEAN_VALUE / 255.
+    height, width, n_channels = input_size
+    orig_width = tf.shape(left_img)[1]
     left_img = left_img - mean
     right_img = tf.image.convert_image_dtype(right_img, tf.float32)
     right_img = right_img - mean
@@ -54,7 +55,7 @@ def preprocess(left_img, right_img, target, input_size):
     right_img = tf.image.resize_bilinear(right_img[np.newaxis, :, :, :], [height, width])[0]
     target = \
         tf.image.resize_nearest_neighbor(target[np.newaxis, :, :, np.newaxis], [height, width])[0]
-    target = target * width / tf.to_float(tf.shape(left_img)[1])
+    target = target * width / tf.to_float(orig_width)
     left_img.set_shape([height, width, n_channels])
     right_img.set_shape([height, width, n_channels])
     target.set_shape([height, width, 1])
@@ -278,4 +279,4 @@ class DispNet(object):
             self.test_error = tf.placeholder(tf.float32)
             tf.summary.scalar('test_error', self.test_error)
             self.merged_summary = tf.summary.merge_all()
-            saver = tf.train.Saver(max_to_keep=2)
+            self.saver = tf.train.Saver(max_to_keep=2)
