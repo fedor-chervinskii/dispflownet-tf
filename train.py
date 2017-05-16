@@ -9,9 +9,9 @@ import numpy as np
 import tensorflow as tf
 from dispnet import DispNet
 from util import readPFM, ft3d_filenames
+from tensorflow.python.client import timeline
 
 INPUT_SIZE = (384, 768, 3)
-BATCH_SIZE = 4
 MODEL_NAME = "DispNetCorr1D"
 
 
@@ -35,6 +35,8 @@ if __name__ == '__main__':
                         metavar="FILE", help='path to FlyingThings3D dataset')
     parser.add_argument("-c", "--ckpt", dest="checkpoint_path", default=".", type=str,
                         metavar="FILE", help='model checkpoint path')
+    parser.add_argument("-b", "--batch_size", dest="batch_size", default=4, type=int,
+                        help='batch size')
     parser.add_argument("-l", "--log_step", dest="log_step", type=int, default=100,
                         help='log step size')
     parser.add_argument("-s", "--save_step", dest="save_step", type=int, default=2000,
@@ -44,17 +46,17 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     
-    init_logger(args.checkpoint_path)
     ft3d_dataset = ft3d_filenames(args.dataset_path)
 
     tf.logging.set_verbosity(tf.logging.ERROR)
     dispnet = DispNet(mode="traintest", ckpt_path=args.checkpoint_path, dataset=ft3d_dataset,
-                      input_size=INPUT_SIZE, batch_size=BATCH_SIZE, corr_type="cuda")
+                      input_size=INPUT_SIZE, batch_size=args.batch_size, corr_type="cuda")
 
     ckpt = tf.train.latest_checkpoint(args.checkpoint_path)
     if not ckpt:
         if not os.path.exists(args.checkpoint_path):
             os.mkdir(args.checkpoint_path)
+    init_logger(args.checkpoint_path)
     writer = tf.summary.FileWriter(args.checkpoint_path)
 
     schedule_step = 10000
@@ -75,7 +77,8 @@ if __name__ == '__main__':
     N_test = 250
 
     gpu_options = tf.GPUOptions(allow_growth=True)
-
+#    options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+#    run_metadata = tf.RunMetadata()
     with tf.Session(graph=dispnet.graph, config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
         sess.run(dispnet.init)
         logging.debug("initialized")
@@ -108,8 +111,12 @@ if __name__ == '__main__':
                     logging.info(feed_dict[dispnet.loss_weights])
                     logging.info("learning rate: %f" % feed_dict[dispnet.learning_rate])
                 _, l, err = sess.run([dispnet.train_step, dispnet.loss, dispnet.error],
-                                      feed_dict=feed_dict)
+                                      feed_dict=feed_dict)#, options=options, run_metadata=run_metadata)
                 # trg, pred = sess.run([target, predictions], feed_dict=feed_dict)
+#                fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+#                chrome_trace = fetched_timeline.generate_chrome_trace_format()
+#                with open('timeline_%d.json' % step, 'w') as f:
+#                    f.write(chrome_trace)
                 l_mean += l
                 step += 1
                 if step % log_step == 0:
