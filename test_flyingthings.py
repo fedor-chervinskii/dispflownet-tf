@@ -1,29 +1,52 @@
 import dispnet
 
-import os
 import cv2
-import glob
 import time
 import argparse
 import numpy as np
+from util import readPFM, ft3d_filenames
 import tensorflow as tf
 
 FT3D_PATH = '../datasets/FlyingThings3D'
+MEAN_VALUE = 100.
+BATCH_SIZE = 4
 
-def ft3d_filenames(path):
-    ft3d_path = path
-    ft3d_samples_filenames = {}
-    for prefix in ["TRAIN", "TEST"]:
-        ft3d_train_data_path = os.path.join(ft3d_path, 'frames_cleanpass/TRAIN')
-        ft3d_train_labels_path = os.path.join(ft3d_path, 'disparity/TRAIN')
-        left_images_filenames = sorted(glob.glob(ft3d_train_data_path + "/*/*/left/*"))
-        right_images_filenames = sorted(glob.glob(ft3d_train_data_path + "/*/*/right/*"))
-        disparity_filenames = sorted(glob.glob(ft3d_train_labels_path + "/*/*/left/*"))
+def preprocess(left_img, right_img, target, orig_size, input_size):
+    left_img = tf.image.convert_image_dtype(left_img, tf.float32)
+    mean = MEAN_VALUE #tf.reduce_mean(left_img)
+    orig_width = orig_size[1]
+    width, height, n_channels = input_size
+    left_img = left_img - mean
+    right_img = tf.image.convert_image_dtype(right_img, tf.float32)
+    right_img = right_img - mean
+    left_img = tf.image.resize_bilinear(left_img[np.newaxis, :, :, :], [height, width])[0]
+    right_img = tf.image.resize_bilinear(right_img[np.newaxis, :, :, :], [height, width])[0]
+    target = tf.image.resize_nearest_neighbor(target[np.newaxis, :, :, np.newaxis], [height, width])[0]
+    target = target * width / orig_width
+    left_img.set_shape([height, width, n_channels])
+    right_img.set_shape([height, width, n_channels])
+    target.set_shape([height, width, 1])
+    return left_img, right_img, target
 
-        ft3d_samples_filenames[prefix] = [(left_images_filenames[i],
-                                           right_images_filenames[i],
-                                           disparity_filenames[i]) for i in range(len(left_images_filenames))]
-    return ft3d_samples_filenames
+def read_sample(filename_queue):
+    filenames = filename_queue.dequeue()
+    left_fn, right_fn, disp_fn = filenames[0], filenames[1], filenames[2]
+    left_img = tf.image.decode_image(tf.read_file(left_fn))
+    right_img = tf.image.decode_image(tf.read_file(right_fn))
+    target = tf.py_func(lambda x: readPFM(x)[0], [disp_fn], tf.float32)
+    return left_img, right_img, target
+
+def input_pipeline(filenames, orig_size, input_size, batch_size, num_epochs=1):
+    filename_queue = tf.train.input_producer(
+        filenames, element_shape = [3], num_epochs=num_epochs, shuffle=True)
+    left_img, right_img, target = read_sample(filename_queue)
+    left_img, right_img, target = preprocess(left_img, right_img, target, orig_size, input_size)
+    min_after_dequeue = 100
+    capacity = min_after_dequeue + 3 * batch_size
+    left_img_batch, right_img_batch, target_batch = tf.train.shuffle_batch(
+        [left_img, right_img, target], batch_size=batch_size, capacity=capacity,
+        min_after_dequeue=min_after_dequeue)
+    return left_img_batch, right_img_batch, target_batch
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -40,8 +63,6 @@ if __name__ == '__main__':
     
     tf.reset_default_graph()
 
-    graph = tf.Graph()
-
     orig_size = (540, 960, 3)
     input_size = (384, 768, 3)
     batch_size = 1
@@ -54,75 +75,48 @@ if __name__ == '__main__':
     else:
         N_test = args.n_steps
 
-    with graph.as_default():
-
-        loss_weights = tf.placeholder(tf.float32, shape=(6),
-                                      name="loss_weights")
-        learning_rate = tf.placeholder(tf.float32, shape=(), name="learning_rate")
-        weight_decay = tf.placeholder_with_default(shape=(), name="weight_decay", input=0.0004)
-        beta1 = tf.placeholder_with_default(shape=(), name="beta1", input=0.9)
-        beta2 = tf.placeholder_with_default(shape=(), name="beta2", input=0.99)
-
-        training_mode = tf.placeholder_with_default(shape=(), input=False)
-
-        train_pipeline = dispnet.input_pipeline(ft3d_samples_filenames["TRAIN"], orig_size=orig_size,
-                                                input_size=input_size, batch_size=batch_size, num_epochs=None)
-
-        val_pipeline = dispnet.input_pipeline(ft3d_samples_filenames["TEST"], orig_size=orig_size,
-                                              input_size=input_size, batch_size=batch_size, num_epochs=None)
-
-        left_image_batch, right_image_batch, target = tf.cond(training_mode,
-                                                              lambda: train_pipeline,
-                                                              lambda: val_pipeline)    
-
-        predictions = dispnet.build_main_graph(left_image_batch, right_image_batch)
-        total_loss, loss, error = dispnet.build_loss(predictions, target, loss_weights, weight_decay)
-
-        optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, beta1=beta1, beta2=beta2)
-        train_step = optimizer.minimize(total_loss)
-
-        init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
-
-        mean_loss = tf.placeholder(tf.float32)
-        tf.summary.scalar('mean_loss', mean_loss)
-
-        merged_summary = tf.summary.merge_all()
-
-        test_error = tf.placeholder(tf.float32)
-        test_error_summary = tf.summary.scalar('test_error', test_error)
-
-        saver = tf.train.Saver()
+    graph = tf.Graph()
         
     with tf.Session(graph=graph) as sess:
-        sess.run(init)
-        print("initialized")
-        coord = tf.train.Coordinator()
-        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-        print("queue runners started")
-        try:
-            ckpt = tf.train.latest_checkpoint(args.checkpoint_path)
-            if ckpt:
-                print("Restoring from %s" % ckpt)
+#        try:
+        ckpt = tf.train.latest_checkpoint(args.checkpoint_path)
+        if ckpt:
+            print("Restoring from %s" % ckpt)
+            with graph.as_default():
+                saver = tf.train.import_meta_graph(ckpt + ".meta")
                 saver.restore(sess=sess, save_path=ckpt)
-                test_err = 0
-                feed_dict = {}
-                feed_dict[training_mode] = False
-                print("Testing...")
-                start = time.time()
-                for i in range(N_test):
-                    err = sess.run([error], feed_dict=feed_dict)
-                    test_err += err[0]
-                    if i % args.log_step == 0:
-                        print("%d iterations, average pass in %f sec" % (i, (time.time()-start)/float(args.log_step)))
-                        start = time.time()
-                test_err = test_err / float(N_test)
-                print("Average test EPE: %f" % test_err)
-            else:
-                print("Havent't found checkpoint in %s" % args.checkpoint_path)
-        except tf.errors.OutOfRangeError:
-            print("OutOfRangeError on %i'th" % (step))
+            init = graph.as_graph_element("init")
+            sess.run(init)
+            left_img, right_img, target = input_pipeline(ft3d_samples_filenames["TEST"],
+                                                         orig_size=orig_size,
+                                                         input_size=input_size,
+                                                         batch_size=BATCH_SIZE,
+                                                         num_epochs=1)
+            print(graph.as_graph_element("left_image_batch"))
+            left_image_batch = 0
+            left_image_batch, right_image_batch, target = left_img, right_img, target
+            coord = tf.train.Coordinator()
+            threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+            print("queue runners started")
+            test_err = 0
+            print("Testing...")
+            start = time.time()
+            error = graph.get_tensor_by_name("error:0")
+            training_mode = graph.get_tensor_by_name("training_mode:0")
+            for i in range(N_test):
+                err = sess.run([error], feed_dict={training_mode: False})
+                test_err += err[0]
+                if i % args.log_step == 0:
+                    print("%d iterations, average pass in %f sec" % (i, (time.time()-start)/float(args.log_step)))
+                    start = time.time()
+            test_err = test_err / float(N_test)
+            print("Average test EPE: %f" % test_err)
+        else:
+            print("Havent't found checkpoint in %s" % args.checkpoint_path)
+#        except tf.errors.OutOfRangeError:
+#            print("OutOfRangeError on %i'th" % (step))
 
-        finally:
-            coord.request_stop()
-            coord.join(threads)
-            sess.close()       
+#       finally:
+        coord.request_stop()
+        coord.join(threads)
+        sess.close()       

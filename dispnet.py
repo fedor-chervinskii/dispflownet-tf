@@ -4,56 +4,64 @@ import numpy as np
 import os
 
 LEAKY_ALPHA = 0.1
-MAX_DISP=40
+MAX_DISP = 40
 MEAN_VALUE = 100.
+INPUT_SIZE = (384, 768, 3)
 
 initializer = tf.contrib.layers.xavier_initializer_conv2d(uniform=False)
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 shift_corr_module = tf.load_op_library(os.path.join(REPO_DIR, 'user_ops/shift_corr.so'))
 
+
+@tf.RegisterGradient("ShiftCorr")
+def _ShiftCorrOpGrad(op, grad):
+    return shift_corr_module.shift_corr_grad(op.inputs[0], op.inputs[1],
+                                             grad, max_disp=max_disp)
+
+
 def correlation(x, y, max_disp):
     x = tf.pad(x, [[0, 0], [0, 0], [max_disp, max_disp], [0, 0]], "CONSTANT")
     y = tf.pad(y, [[0, 0], [0, 0], [max_disp, max_disp], [0, 0]], "CONSTANT")
     corr = shift_corr_module.shift_corr(x, y, max_disp=max_disp)
 
-    @tf.RegisterGradient("ShiftCorr")
-    def _ShiftCorrOpGrad(op, grad):
-        return shift_corr_module.shift_corr_grad(op.inputs[0], op.inputs[1], grad, max_disp=max_disp)
-
     return tf.transpose(corr, perm=[0, 2, 3, 1])
+
 
 def correlation_map(x, y, max_disp):
     corr_tensors = []
     for i in range(-max_disp, 0, 1):
         shifted = tf.pad(tf.slice(y, [0]*4, [-1, -1, y.shape[2].value + i, -1]),
-                                  [[0, 0], [0, 0], [-i, 0], [0, 0]], "CONSTANT")
+                         [[0, 0], [0, 0], [-i, 0], [0, 0]], "CONSTANT")
         corr = tf.reduce_mean(tf.multiply(shifted, x), axis=3)
         corr_tensors.append(corr)
     for i in range(max_disp + 1):
         shifted = tf.pad(tf.slice(x, [0, 0, i, 0], [-1]*4),
-                                  [[0, 0], [0, 0], [0, i], [0, 0]], "CONSTANT")
+                         [[0, 0], [0, 0], [0, i], [0, 0]], "CONSTANT")
         corr = tf.reduce_mean(tf.multiply(shifted, y), axis=3)
         corr_tensors.append(corr)
     return tf.transpose(tf.stack(corr_tensors),
-                        perm=[1,2,3,0])
+                        perm=[1, 2, 3, 0])
 
-def preprocess(left_img, right_img, target, orig_size, input_size):
+
+def preprocess(left_img, right_img, target, input_size):
     left_img = tf.image.convert_image_dtype(left_img, tf.float32)
-    mean = MEAN_VALUE #tf.reduce_mean(left_img)
-    orig_width = orig_size[1]
+    mean = MEAN_VALUE  # tf.reduce_mean(left_img)
+    orig_width = left_img.get_shape()[1].value
     width, height, n_channels = input_size
     left_img = left_img - mean
     right_img = tf.image.convert_image_dtype(right_img, tf.float32)
     right_img = right_img - mean
     left_img = tf.image.resize_bilinear(left_img[np.newaxis, :, :, :], [height, width])[0]
     right_img = tf.image.resize_bilinear(right_img[np.newaxis, :, :, :], [height, width])[0]
-    target = tf.image.resize_nearest_neighbor(target[np.newaxis, :, :, np.newaxis], [height, width])[0]
+    target = \
+        tf.image.resize_nearest_neighbor(target[np.newaxis, :, :, np.newaxis], [height, width])[0]
     target = target * width / orig_width
     left_img.set_shape([height, width, n_channels])
     right_img.set_shape([height, width, n_channels])
     target.set_shape([height, width, 1])
     return left_img, right_img, target
+
 
 def read_sample(filename_queue):
     filenames = filename_queue.dequeue()
@@ -63,17 +71,19 @@ def read_sample(filename_queue):
     target = tf.py_func(lambda x: readPFM(x)[0], [disp_fn], tf.float32)
     return left_img, right_img, target
 
-def input_pipeline(filenames, orig_size, input_size, batch_size, num_epochs=None):
+
+def input_pipeline(filenames, input_size, batch_size, num_epochs=None):
     filename_queue = tf.train.input_producer(
-        filenames, element_shape = [3], num_epochs=num_epochs, shuffle=True)
+        filenames, element_shape=[3], num_epochs=num_epochs, shuffle=True)
     left_img, right_img, target = read_sample(filename_queue)
-    left_img, right_img, target = preprocess(left_img, right_img, target, orig_size, input_size)
+    left_img, right_img, target = preprocess(left_img, right_img, target, input_size)
     min_after_dequeue = 100
     capacity = min_after_dequeue + 3 * batch_size
     left_img_batch, right_img_batch, target_batch = tf.train.shuffle_batch(
         [left_img, right_img, target], batch_size=batch_size, capacity=capacity,
         min_after_dequeue=min_after_dequeue)
     return left_img_batch, right_img_batch, target_batch
+
 
 def conv2d(x, kernel_shape, strides=1, relu=True, padding='SAME'):
     W = tf.get_variable("weights", kernel_shape, initializer=initializer)
@@ -88,10 +98,12 @@ def conv2d(x, kernel_shape, strides=1, relu=True, padding='SAME'):
             x_min = tf.reduce_min(W)
             x_max = tf.reduce_max(W)
             kernel_0_to_1 = (W - x_min) / (x_max - x_min)
-            kernel_transposed = tf.transpose (kernel_0_to_1, [3, 0, 1, 2])
-            tf.summary.image('filters', kernel_transposed, max_outputs=3)       
-        if relu : x = tf.maximum(LEAKY_ALPHA * x, x)
+            kernel_transposed = tf.transpose(kernel_0_to_1, [3, 0, 1, 2])
+            tf.summary.image('filters', kernel_transposed, max_outputs=3)
+        if relu:
+            x = tf.maximum(LEAKY_ALPHA * x, x)
     return x
+
 
 def conv2d_transpose(x, kernel_shape, strides=1, relu=True):
     W = tf.get_variable("weights", kernel_shape, initializer=initializer)
@@ -103,8 +115,10 @@ def conv2d_transpose(x, kernel_shape, strides=1, relu=True):
         x = tf.nn.conv2d_transpose(x, W, output_shape, strides=[1, strides, strides, 1],
                                    padding='SAME')
         x = tf.nn.bias_add(x, b)
-        if relu : x = tf.maximum(LEAKY_ALPHA * x, x)
+        if relu:
+            x = tf.maximum(LEAKY_ALPHA * x, x)
     return x
+
 
 def upsampling_block(bottom, skip_connection, input_channels, output_channels, skip_input_channels):
     with tf.variable_scope("deconv"):
@@ -119,9 +133,9 @@ def upsampling_block(bottom, skip_connection, input_channels, output_channels, s
                         [3, 3, output_channels + skip_input_channels + 1, output_channels],
                         strides=1, relu=False)
     return concat, predict
-    
 
-def build_main_graph(left_image_batch, right_image_batch):
+
+def build_main_graph(left_image_batch, right_image_batch, corr_type="tf"):
     with tf.variable_scope("conv1") as scope:
         conv1a = conv2d(left_image_batch, [7, 7, 3, 64], strides=2)
         scope.reuse_variables()
@@ -133,8 +147,10 @@ def build_main_graph(left_image_batch, right_image_batch):
     with tf.variable_scope("conv_redir"):
         conv_redir = conv2d(conv2a, [1, 1, 128, 64], strides=1)
     with tf.name_scope("correlation"):
-        corr = correlation_map(conv2a, conv2b, max_disp=MAX_DISP)
-#        corr = correlation(conv2a, conv2b, max_disp=MAX_DISP)
+        if corr_type = "tf":
+            corr = correlation_map(conv2a, conv2b, max_disp=MAX_DISP)
+        else:
+            corr = correlation(conv2a, conv2b, max_disp=MAX_DISP)
     with tf.variable_scope("conv3"):
         conv3 = conv2d(tf.concat([corr, conv_redir], axis=3), [5, 5, 145, 256], strides=2)
         with tf.variable_scope("1"):
@@ -166,15 +182,17 @@ def build_main_graph(left_image_batch, right_image_batch):
     return (predict1, predict2, predict3,
             predict4, predict5, predict6)
 
+
 def L1_loss(x, y):
     return tf.reduce_mean(tf.abs(x - y))
+
 
 def build_loss(predictions, target, loss_weights, weight_decay):
     height, width = target.get_shape()[1].value, target.get_shape()[2].value
     regularizer = tf.contrib.layers.l2_regularizer(weight_decay)
     with tf.name_scope("loss"):
         targets = [tf.image.resize_nearest_neighbor(target, [height / np.power(2, n),
-                                                         width / np.power(2, n)])
+                                                    width / np.power(2, n)])
                    for n in range(1, 7)]
         losses = [L1_loss(targets[i], predictions[i]) for i in range(6)]
         for i in range(6):
@@ -186,3 +204,77 @@ def build_loss(predictions, target, loss_weights, weight_decay):
         tf.summary.scalar('loss', loss)
         error = losses[0]
         return total_loss, loss, error
+
+
+class DispNet(object):
+    def __init__(mode="inference", ckpt_path=".", dataset=None,
+                 input_size=INPUT_SIZE, batch_size=4, corr_type="tf"):
+        self.ckpt_path = ckpt_path
+        self.input_size = input_size
+        self.batch_size = batch_size
+        self.corr_type = corr_type
+        self.mode = mode
+        self.create_graph()
+
+    def create_graph():
+        self.graph = tf.Graph()
+        with self.graph.ad_default():
+            self.loss_weights = tf.placeholder(tf.float32, shape=(6),
+                                               name="loss_weights")
+            self.learning_rate = tf.placeholder(tf.float32, shape=(), name="learning_rate")
+            weight_decay = tf.placeholder_with_default(shape=(), name='weight_decay', input=0.0004)
+            beta1 = tf.placeholder_with_default(shape=(), name="beta1", input=0.9)
+            beta2 = tf.placeholder_with_default(shape=(), name="beta2", input=0.99)
+
+            if self.mode == "traintest":
+                self.train_pipeline = input_pipeline(dataset["TRAIN"], input_size=self.input_size,
+                                                     batch_size=self.batch_size)
+                self.val_pipeline = create_pipeline(dataset["TEST"], input_size=self.input_size,
+                                                    batch_size=self.batch_size)
+                self.training_mode = tf.placeholder_with_default(shape=(), input=True,
+                                                                 name="training_mode")
+                self.inputs = tf.cond(training_mode,
+                                      lambda: train_pipeline,
+                                      lambda: val_pipeline)
+            elif self.mode == "test":
+                self.test_pipeline = create_pipeline(dataset["TEST"], input_size=self.input_size,
+                                                     batch_size=self.batch_size)
+                self.inputs = self.test_pipeline
+            elif self.mode == "inference":
+                h, w, c = input_size
+                self.inputs = (tf.placeholder(tf.float32, shape=(1, h, w, c), name="left_img"),
+                               tf.placeholder(tf.float32, shape=(1, h, w, c), name="right_img"),
+                               tf.placeholder_with_default(tf.float32, shape=(1, h, w, 1),
+                                                           name="disp_gt",
+                                                           input=tf.zeros(shape=(1, h, w, 1),
+                                                                          dtype=tf.float32)))
+
+            left_image_batch, right_image_batch, target = self.inputs
+            predictions = build_main_graph(left_image_batch, right_image_batch,
+                                           corr_type=self.corr_type)
+            total_loss, loss, error = build_loss(predictions, target, loss_weights, weight_decay)
+            tf.summary.scalar('error', error)
+            tf.summary.image("left", tf.slice(left_image_batch, [0]*4, [1, -1, -1, -1]),
+                             max_outputs=1)
+            tf.summary.image("right", tf.slice(right_image_batch, [0]*4, [1, -1, -1, -1]),
+                             max_outputs=1)
+            for i in range(6):
+                tf.summary.image("disp" + str(i),
+                                 tf.slice(predictions[i], [0]*4, [1, -1, -1, -1]),
+                                 max_outputs=1)
+            tf.summary.image("disp0_gt",
+                             tf.slice(target, [0]*4, [1, -1, -1, -1]),
+                             max_outputs=1)
+
+            optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate,
+                                               beta1=beta1, beta2=beta2)
+            train_step = optimizer.minimize(total_loss)
+
+            self.init = tf.group(tf.global_variables_initializer(),
+                                 tf.local_variables_initializer())
+            mean_loss = tf.placeholder(tf.float32)
+            tf.summary.scalar('mean_loss', mean_loss)
+            test_error = tf.placeholder(tf.float32)
+            test_error_summary = tf.summary.scalar('test_error', test_error)
+            merged_summary = tf.summary.merge_all()
+            saver = tf.train.Saver(max_to_keep=2)

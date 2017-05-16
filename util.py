@@ -1,4 +1,6 @@
 import re
+import os
+import glob
 import numpy as np
 
 def readPFM(file):
@@ -37,3 +39,18 @@ def readPFM(file):
     data = np.reshape(data, shape)
     data = np.flipud(data)
     return data, scale
+
+def ft3d_filenames(path):
+    ft3d_path = path
+    ft3d_samples_filenames = {}
+    for prefix in ["TRAIN", "TEST"]:
+        ft3d_train_data_path = os.path.join(ft3d_path, 'frames_cleanpass/TRAIN')
+        ft3d_train_labels_path = os.path.join(ft3d_path, 'disparity/TRAIN')
+        left_images_filenames = sorted(glob.glob(ft3d_train_data_path + "/*/*/left/*"))
+        right_images_filenames = sorted(glob.glob(ft3d_train_data_path + "/*/*/right/*"))
+        disparity_filenames = sorted(glob.glob(ft3d_train_labels_path + "/*/*/left/*"))
+
+        ft3d_samples_filenames[prefix] = [(left_images_filenames[i],
+                                           right_images_filenames[i],
+                                           disparity_filenames[i]) for i in range(len(left_images_filenames))]
+    return ft3d_samples_filenames
