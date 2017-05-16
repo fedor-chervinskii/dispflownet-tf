@@ -14,16 +14,15 @@ REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 shift_corr_module = tf.load_op_library(os.path.join(REPO_DIR, 'user_ops/shift_corr.so'))
 
 
-@tf.RegisterGradient("ShiftCorr")
-def _ShiftCorrOpGrad(op, grad):
-    return shift_corr_module.shift_corr_grad(op.inputs[0], op.inputs[1],
-                                             grad, max_disp=max_disp)
-
-
 def correlation(x, y, max_disp):
     x = tf.pad(x, [[0, 0], [0, 0], [max_disp, max_disp], [0, 0]], "CONSTANT")
     y = tf.pad(y, [[0, 0], [0, 0], [max_disp, max_disp], [0, 0]], "CONSTANT")
     corr = shift_corr_module.shift_corr(x, y, max_disp=max_disp)
+
+    @tf.RegisterGradient("ShiftCorr")
+    def _ShiftCorrOpGrad(op, grad):
+        return shift_corr_module.shift_corr_grad(op.inputs[0], op.inputs[1],
+                                                 grad, max_disp=max_disp)
 
     return tf.transpose(corr, perm=[0, 2, 3, 1])
 
@@ -47,7 +46,6 @@ def correlation_map(x, y, max_disp):
 def preprocess(left_img, right_img, target, input_size):
     left_img = tf.image.convert_image_dtype(left_img, tf.float32)
     mean = MEAN_VALUE  # tf.reduce_mean(left_img)
-    orig_width = left_img.get_shape()[1].value
     width, height, n_channels = input_size
     left_img = left_img - mean
     right_img = tf.image.convert_image_dtype(right_img, tf.float32)
@@ -56,7 +54,7 @@ def preprocess(left_img, right_img, target, input_size):
     right_img = tf.image.resize_bilinear(right_img[np.newaxis, :, :, :], [height, width])[0]
     target = \
         tf.image.resize_nearest_neighbor(target[np.newaxis, :, :, np.newaxis], [height, width])[0]
-    target = target * width / orig_width
+    target = target * width / tf.to_float(tf.shape(left_img)[1])
     left_img.set_shape([height, width, n_channels])
     right_img.set_shape([height, width, n_channels])
     target.set_shape([height, width, 1])
@@ -147,7 +145,7 @@ def build_main_graph(left_image_batch, right_image_batch, corr_type="tf"):
     with tf.variable_scope("conv_redir"):
         conv_redir = conv2d(conv2a, [1, 1, 128, 64], strides=1)
     with tf.name_scope("correlation"):
-        if corr_type = "tf":
+        if corr_type == "tf":
             corr = correlation_map(conv2a, conv2b, max_disp=MAX_DISP)
         else:
             corr = correlation(conv2a, conv2b, max_disp=MAX_DISP)
@@ -207,18 +205,19 @@ def build_loss(predictions, target, loss_weights, weight_decay):
 
 
 class DispNet(object):
-    def __init__(mode="inference", ckpt_path=".", dataset=None,
+    def __init__(self, mode="inference", ckpt_path=".", dataset=None,
                  input_size=INPUT_SIZE, batch_size=4, corr_type="tf"):
         self.ckpt_path = ckpt_path
         self.input_size = input_size
         self.batch_size = batch_size
         self.corr_type = corr_type
+        self.dataset = dataset
         self.mode = mode
         self.create_graph()
 
-    def create_graph():
+    def create_graph(self):
         self.graph = tf.Graph()
-        with self.graph.ad_default():
+        with self.graph.as_default():
             self.loss_weights = tf.placeholder(tf.float32, shape=(6),
                                                name="loss_weights")
             self.learning_rate = tf.placeholder(tf.float32, shape=(), name="learning_rate")
@@ -227,19 +226,19 @@ class DispNet(object):
             beta2 = tf.placeholder_with_default(shape=(), name="beta2", input=0.99)
 
             if self.mode == "traintest":
-                self.train_pipeline = input_pipeline(dataset["TRAIN"], input_size=self.input_size,
-                                                     batch_size=self.batch_size)
-                self.val_pipeline = create_pipeline(dataset["TEST"], input_size=self.input_size,
-                                                    batch_size=self.batch_size)
+                train_pipeline = input_pipeline(self.dataset["TRAIN"], input_size=self.input_size,
+                                                batch_size=self.batch_size)
+                val_pipeline = input_pipeline(self.dataset["TEST"], input_size=self.input_size,
+                                              batch_size=self.batch_size)
                 self.training_mode = tf.placeholder_with_default(shape=(), input=True,
                                                                  name="training_mode")
-                self.inputs = tf.cond(training_mode,
+                self.inputs = tf.cond(self.training_mode,
                                       lambda: train_pipeline,
                                       lambda: val_pipeline)
             elif self.mode == "test":
-                self.test_pipeline = create_pipeline(dataset["TEST"], input_size=self.input_size,
-                                                     batch_size=self.batch_size)
-                self.inputs = self.test_pipeline
+                test_pipeline = input_pipeline(self.dataset["TEST"], input_size=self.input_size,
+                                               batch_size=self.batch_size)
+                self.inputs = test_pipeline
             elif self.mode == "inference":
                 h, w, c = input_size
                 self.inputs = (tf.placeholder(tf.float32, shape=(1, h, w, c), name="left_img"),
@@ -250,31 +249,33 @@ class DispNet(object):
                                                                           dtype=tf.float32)))
 
             left_image_batch, right_image_batch, target = self.inputs
-            predictions = build_main_graph(left_image_batch, right_image_batch,
-                                           corr_type=self.corr_type)
-            total_loss, loss, error = build_loss(predictions, target, loss_weights, weight_decay)
-            tf.summary.scalar('error', error)
+            self.predictions = build_main_graph(left_image_batch, right_image_batch,
+                                                corr_type=self.corr_type)
+            self.total_loss, self.loss, self.error = build_loss(self.predictions, target, 
+                                                                self.loss_weights,
+                                                                weight_decay)
+            tf.summary.scalar('error', self.error)
             tf.summary.image("left", tf.slice(left_image_batch, [0]*4, [1, -1, -1, -1]),
                              max_outputs=1)
             tf.summary.image("right", tf.slice(right_image_batch, [0]*4, [1, -1, -1, -1]),
                              max_outputs=1)
             for i in range(6):
                 tf.summary.image("disp" + str(i),
-                                 tf.slice(predictions[i], [0]*4, [1, -1, -1, -1]),
+                                 tf.slice(self.predictions[i], [0]*4, [1, -1, -1, -1]),
                                  max_outputs=1)
             tf.summary.image("disp0_gt",
                              tf.slice(target, [0]*4, [1, -1, -1, -1]),
                              max_outputs=1)
 
-            optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate,
+            optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
                                                beta1=beta1, beta2=beta2)
-            train_step = optimizer.minimize(total_loss)
+            self.train_step = optimizer.minimize(self.total_loss)
 
             self.init = tf.group(tf.global_variables_initializer(),
                                  tf.local_variables_initializer())
-            mean_loss = tf.placeholder(tf.float32)
-            tf.summary.scalar('mean_loss', mean_loss)
-            test_error = tf.placeholder(tf.float32)
-            test_error_summary = tf.summary.scalar('test_error', test_error)
-            merged_summary = tf.summary.merge_all()
+            self.mean_loss = tf.placeholder(tf.float32)
+            tf.summary.scalar('mean_loss', self.mean_loss)
+            self.test_error = tf.placeholder(tf.float32)
+            tf.summary.scalar('test_error', self.test_error)
+            self.merged_summary = tf.summary.merge_all()
             saver = tf.train.Saver(max_to_keep=2)
