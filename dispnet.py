@@ -134,24 +134,35 @@ def upsampling_block(bottom, skip_connection, input_channels, output_channels, s
     return concat, predict
 
 
-def build_main_graph(left_image_batch, right_image_batch, corr_type="tf"):
-    with tf.variable_scope("conv1") as scope:
-        conv1a = conv2d(left_image_batch, [7, 7, 3, 64], strides=2)
-        scope.reuse_variables()
-        conv1b = conv2d(right_image_batch, [7, 7, 3, 64], strides=2)
-    with tf.variable_scope("conv2") as scope:
-        conv2a = conv2d(conv1a, [5, 5, 64, 128], strides=2)
-        scope.reuse_variables()
-        conv2b = conv2d(conv1b, [5, 5, 64, 128], strides=2)
-    with tf.variable_scope("conv_redir"):
-        conv_redir = conv2d(conv2a, [1, 1, 128, 64], strides=1)
-    with tf.name_scope("correlation"):
-        if corr_type == "tf":
-            corr = correlation_map(conv2a, conv2b, max_disp=MAX_DISP)
-        else:
-            corr = correlation(conv2a, conv2b, max_disp=MAX_DISP)
+def build_main_graph(left_image_batch, right_image_batch, is_corr=True, corr_type="tf"):
+    if is_corr:
+        with tf.variable_scope("conv1") as scope:
+            conv1a = conv2d(left_image_batch, [7, 7, 3, 64], strides=2)
+            scope.reuse_variables()
+            conv1b = conv2d(right_image_batch, [7, 7, 3, 64], strides=2)
+        with tf.variable_scope("conv2") as scope:
+            conv2a = conv2d(conv1a, [5, 5, 64, 128], strides=2)
+            scope.reuse_variables()
+            conv2b = conv2d(conv1b, [5, 5, 64, 128], strides=2)
+        with tf.variable_scope("conv_redir"):
+            conv_redir = conv2d(conv2a, [1, 1, 128, 64], strides=1)
+        with tf.name_scope("correlation"):
+            if corr_type == "tf":
+                corr = correlation_map(conv2a, conv2b, max_disp=MAX_DISP)
+            else:
+                corr = correlation(conv2a, conv2b, max_disp=MAX_DISP)
+        with tf.variable_scope("conv3"):
+            conv3 = conv2d(tf.concat([corr, conv_redir], axis=3),
+                           [5, 5, MAX_DISP*2 + 1 + 64, 256], strides=2)
+    else:
+        with tf.variable_scope("conv1") as scope:
+            conv1 = conv2d(tf.concat([left_image_batch, right_image_batch], axis=3),
+                           [7, 7, 3, 64], strides=2)
+        with tf.variable_scope("conv2") as scope:
+            conv2 = conv2d(conv1, [5, 5, 64, 128], strides=2)            
+        with tf.variable_scope("conv3"):
+            conv3 = conv2d(conv2, [5, 5, 128, 256], strides=2)
     with tf.variable_scope("conv3"):
-        conv3 = conv2d(tf.concat([corr, conv_redir], axis=3), [5, 5, 145, 256], strides=2)
         with tf.variable_scope("1"):
             conv3_1 = conv2d(conv3, [3, 3, 256, 256], strides=1)
     with tf.variable_scope("conv4"):
@@ -207,10 +218,11 @@ def build_loss(predictions, target, loss_weights, weight_decay):
 
 class DispNet(object):
     def __init__(self, mode="inference", ckpt_path=".", dataset=None,
-                 input_size=INPUT_SIZE, batch_size=4, corr_type="tf"):
+                 input_size=INPUT_SIZE, batch_size=4, is_corr=True, corr_type="tf"):
         self.ckpt_path = ckpt_path
         self.input_size = input_size
         self.batch_size = batch_size
+        self.is_corr = is_corr
         self.corr_type = corr_type
         self.dataset = dataset
         self.mode = mode
@@ -251,7 +263,7 @@ class DispNet(object):
 
             left_image_batch, right_image_batch, target = self.inputs
             self.predictions = build_main_graph(left_image_batch, right_image_batch,
-                                                corr_type=self.corr_type)
+                                                is_corr=self.is_corr, corr_type=self.corr_type)
             self.total_loss, self.loss, self.error = build_loss(self.predictions, target, 
                                                                 self.loss_weights,
                                                                 weight_decay)

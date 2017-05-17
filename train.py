@@ -9,7 +9,7 @@ from dispnet import DispNet
 from util import init_logger, ft3d_filenames
 from tensorflow.python.client import timeline
 
-MODEL_NAME = "DispNetCorr1D"
+CORR = True
 
 
 if __name__ == '__main__':
@@ -35,13 +35,16 @@ if __name__ == '__main__':
 
     tf.logging.set_verbosity(tf.logging.ERROR)
     dispnet = DispNet(mode="traintest", ckpt_path=args.checkpoint_path, dataset=ft3d_dataset,
-                      batch_size=args.batch_size, corr_type="cuda")
+                      batch_size=args.batch_size, is_corr=CORR, corr_type="cuda")
 
     ckpt = tf.train.latest_checkpoint(args.checkpoint_path)
     if not ckpt:
         if not os.path.exists(args.checkpoint_path):
             os.mkdir(args.checkpoint_path)
-    init_logger(args.checkpoint_path, name="test")
+    model_name = "DispNet"
+    if CORR:
+        model_name += "Corr1D"
+    init_logger(args.checkpoint_path, name=model_name)
     writer = tf.summary.FileWriter(args.checkpoint_path)
 
     schedule_step = 50000
@@ -81,8 +84,8 @@ if __name__ == '__main__':
             if ckpt:
                 logging.info("Restoring from %s" % ckpt)
                 dispnet.saver.restore(sess=sess, save_path=ckpt)
-                step = int(ckpt[len(os.path.join(args.checkpoint_path, MODEL_NAME))+1:])
-                print("step: %d" % step)
+                step = int(ckpt[len(os.path.join(args.checkpoint_path, model_name))+1:])
+                logging.info("step: %d" % step)
             else:
                 step = 0
             schedule_current = min(step / schedule_step, len(weights_schedule)-1)
@@ -90,9 +93,10 @@ if __name__ == '__main__':
             feed_dict[dispnet.learning_rate] = lr_schedule[schedule_current]
             while step < 5e5:
                 if step % schedule_step == 0:
+                    schedule_current = min(step / schedule_step, len(weights_schedule)-1)
                     feed_dict[dispnet.loss_weights] = np.array(weights_schedule[schedule_current])
                     feed_dict[dispnet.learning_rate] = lr_schedule[schedule_current]
-                    logging.info("switching weights:")
+                    logging.info("iter: %d, switching weights:" % step)
                     logging.info(feed_dict[dispnet.loss_weights])
                     logging.info("learning rate: %f" % feed_dict[dispnet.learning_rate])
                 _, l, err = sess.run([dispnet.train_step, dispnet.loss, dispnet.error],
