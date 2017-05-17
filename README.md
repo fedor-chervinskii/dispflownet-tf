@@ -2,11 +2,12 @@
 
 This is Tensorflow implementation of DispNet from https://lmb.informatik.uni-freiburg.de/Publications/2016/MIFDB16/MIFDB16.pdf
 
-Currently DispNetCorr1D is implemented and converges in experiments.
+Currently DispNet and DispNetCorr1D are implemented and converge in experiments.
 
 Model | FlyingThings3D EPE | FPS (K40)
 -------|-----|-------
-DispNetCorr1D (slow) | 3.4 | 5
+DispNetCorr1D (slow) | 2.28 | 5
+DispNetCorr1D (fast) | 3.4  | 10
 
 ## Correlation Layer
 
