@@ -88,12 +88,12 @@ if __name__ == '__main__':
                 logging.info("step: %d" % step)
             else:
                 step = 0
-            schedule_current = min(step / schedule_step, len(weights_schedule)-1)
+            schedule_current = min(step // schedule_step, len(weights_schedule)-1)
             feed_dict[dispnet.loss_weights] = np.array(weights_schedule[schedule_current])
             feed_dict[dispnet.learning_rate] = lr_schedule[schedule_current]
             while step < 5e5:
                 if step % schedule_step == 0:
-                    schedule_current = min(step / schedule_step, len(weights_schedule)-1)
+                    schedule_current = min(step // schedule_step, len(weights_schedule)-1)
                     feed_dict[dispnet.loss_weights] = np.array(weights_schedule[schedule_current])
                     feed_dict[dispnet.learning_rate] = lr_schedule[schedule_current]
                     logging.info("iter: %d, switching weights:" % step)

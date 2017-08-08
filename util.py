@@ -16,17 +16,17 @@ def readPFM(file):
     endian = None
 
     header = file.readline().rstrip()
-    if header == 'PF':
+    if header == b'PF':
         color = True
-    elif header == 'Pf':
+    elif header == b'Pf':
         color = False
     else:
         raise Exception('Not a PFM file.')
 
-    dim_match = re.match(r'^(\d+)\s(\d+)\s$', file.readline())
-    if dim_match:
-        width, height = map(int, dim_match.groups())
-    else:
+    dims = file.readline()
+    try:
+        width,height = list(map(int,dims.split()))
+    except:
         raise Exception('Malformed PFM header.')
 
     scale = float(file.readline().rstrip())

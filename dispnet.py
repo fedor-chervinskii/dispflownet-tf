@@ -201,8 +201,8 @@ def build_loss(predictions, target, loss_weights, weight_decay):
     height, width = target.get_shape()[1].value, target.get_shape()[2].value
     regularizer = tf.contrib.layers.l2_regularizer(weight_decay)
     with tf.name_scope("loss"):
-        targets = [tf.image.resize_nearest_neighbor(target, [height / np.power(2, n),
-                                                    width / np.power(2, n)])
+        targets = [tf.image.resize_nearest_neighbor(target, [height // np.power(2, n),
+                                                    width // np.power(2, n)])
                    for n in range(1, 7)]
         losses = [L1_loss(targets[i], predictions[i]) for i in range(6)]
         for i in range(6):
