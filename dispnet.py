@@ -53,8 +53,7 @@ def preprocess(left_img, right_img, target, input_size):
     right_img = right_img - mean
     left_img = tf.image.resize_bilinear(left_img[np.newaxis, :, :, :], [height, width])[0]
     right_img = tf.image.resize_bilinear(right_img[np.newaxis, :, :, :], [height, width])[0]
-    target = \
-        tf.image.resize_nearest_neighbor(target[np.newaxis, :, :, np.newaxis], [height, width])[0]
+    target = tf.image.resize_nearest_neighbor(target[np.newaxis, :, :, np.newaxis], [height, width])[0]
     target = target * width / tf.to_float(orig_width)
     left_img.set_shape([height, width, n_channels])
     right_img.set_shape([height, width, n_channels])
@@ -72,8 +71,7 @@ def read_sample(filename_queue):
 
 
 def input_pipeline(filenames, input_size, batch_size, num_epochs=None):
-    filename_queue = tf.train.input_producer(
-        filenames, element_shape=[3], num_epochs=num_epochs, shuffle=True)
+    filename_queue = tf.train.input_producer(filenames, element_shape=[3], num_epochs=num_epochs, shuffle=True)
     left_img, right_img, target = read_sample(filename_queue)
     left_img, right_img, target = preprocess(left_img, right_img, target, input_size)
     min_after_dequeue = 100
@@ -91,14 +89,14 @@ def conv2d(x, kernel_shape, strides=1, relu=True, padding='SAME'):
     with tf.name_scope("conv"):
         x = tf.nn.conv2d(x, W, strides=[1, strides, strides, 1], padding=padding)
         x = tf.nn.bias_add(x, b)
-        tf.summary.histogram("W", W)
-        tf.summary.histogram("b", b)
-        if kernel_shape[2] == 3:
-            x_min = tf.reduce_min(W)
-            x_max = tf.reduce_max(W)
-            kernel_0_to_1 = (W - x_min) / (x_max - x_min)
-            kernel_transposed = tf.transpose(kernel_0_to_1, [3, 0, 1, 2])
-            tf.summary.image('filters', kernel_transposed, max_outputs=3)
+        #tf.summary.histogram("W", W)
+        #tf.summary.histogram("b", b)
+        # if kernel_shape[2] == 3:
+        #     x_min = tf.reduce_min(W)
+        #     x_max = tf.reduce_max(W)
+        #     kernel_0_to_1 = (W - x_min) / (x_max - x_min)
+        #     kernel_transposed = tf.transpose(kernel_0_to_1, [3, 0, 1, 2])
+        #     tf.summary.image('filters', kernel_transposed, max_outputs=3)
         if relu:
             x = tf.maximum(LEAKY_ALPHA * x, x)
     return x
@@ -124,7 +122,7 @@ def upsampling_block(bottom, skip_connection, input_channels, output_channels, s
         deconv = conv2d_transpose(bottom, [4, 4, output_channels, input_channels], strides=2)
     with tf.variable_scope("predict"):
         predict = conv2d(bottom, [3, 3, input_channels, 1], strides=1, relu=False)
-        tf.summary.histogram("predict", predict)
+        #tf.summary.histogram("predict", predict)
     with tf.variable_scope("up_predict"):
         upsampled_predict = conv2d_transpose(predict, [4, 4, 1, 1], strides=2, relu=False)
     with tf.variable_scope("concat"):

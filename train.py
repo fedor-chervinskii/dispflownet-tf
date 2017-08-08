@@ -69,11 +69,11 @@ if __name__ == '__main__':
 #    run_metadata = tf.RunMetadata()
     with tf.Session(graph=dispnet.graph, config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
         sess.run(dispnet.init)
-        logging.debug("initialized")
+        logging.debug("initialized\n")
         writer.add_graph(sess.graph)
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-        logging.debug("queue runners started")
+        logging.debug("queue runners started\n")
         try:
             feed_dict = {}
             feed_dict[dispnet.training_mode] = True
@@ -82,10 +82,10 @@ if __name__ == '__main__':
             feed_dict[dispnet.test_error] = None
             ckpt = tf.train.latest_checkpoint(args.checkpoint_path)
             if ckpt:
-                logging.info("Restoring from %s" % ckpt)
+                logging.info("Restoring from %s\n" % ckpt)
                 dispnet.saver.restore(sess=sess, save_path=ckpt)
                 step = int(ckpt[len(os.path.join(args.checkpoint_path, model_name))+1:])
-                logging.info("step: %d" % step)
+                logging.info("step: %d\n" % step)
             else:
                 step = 0
             schedule_current = min(step // schedule_step, len(weights_schedule)-1)
@@ -97,44 +97,38 @@ if __name__ == '__main__':
                     feed_dict[dispnet.loss_weights] = np.array(weights_schedule[schedule_current])
                     feed_dict[dispnet.learning_rate] = lr_schedule[schedule_current]
                     logging.info("iter: %d, switching weights:" % step)
-                    logging.info(feed_dict[dispnet.loss_weights])
-                    logging.info("learning rate: %f" % feed_dict[dispnet.learning_rate])
-                _, l, err = sess.run([dispnet.train_step, dispnet.loss, dispnet.error],
-                                      feed_dict=feed_dict)#, options=options, run_metadata=run_metadata)
-                # trg, pred = sess.run([target, predictions], feed_dict=feed_dict)
-#                fetched_timeline = timeline.Timeline(run_metadata.step_stats)
-#                chrome_trace = fetched_timeline.generate_chrome_trace_format()
-#                with open('timeline_%d.json' % step, 'w') as f:
-#                    f.write(chrome_trace)
+                    logging.info(str(feed_dict[dispnet.loss_weights])+'\n')
+                    logging.info("learning rate: %f\n" % feed_dict[dispnet.learning_rate])
+                _, l, err = sess.run([dispnet.train_step, dispnet.loss, dispnet.error],feed_dict=feed_dict)
                 l_mean += l
-                step += dispnet.batch_size
+                step += 1
                 if step % log_step == 0:
                     l_mean = np.array(l_mean / float(log_step))
                     feed_dict[dispnet.mean_loss] = l_mean
                     s = sess.run(dispnet.merged_summary, feed_dict=feed_dict)
                     writer.add_summary(s, step)
-                    logging.debug("iter: %d, f/b pass time: %f, loss: %f, error %f" %
+                    logging.debug("iter: %d, f/b pass time: %f, loss: %f, error %f\n" %
                                   (step, ((time.time() - start) / float(log_step)), l_mean, err))
                     l_mean = 0
                     start = time.time()
                 if step % save_step == 0:
-                    logging.info("saving to file %s." % 
+                    logging.info("saving to file %s.\n" % 
                                  (os.path.join(args.checkpoint_path, MODEL_NAME)))
                     dispnet.saver.save(sess, os.path.join(args.checkpoint_path, MODEL_NAME),
                                        global_step=step)
                 if step % test_step == 0:
                     test_err = 0
                     feed_dict[dispnet.training_mode] = False
-                    logging.info("Testing...")
+                    logging.info("Testing...\n")
                     for j in range(N_test):
                         err = sess.run([dispnet.error], feed_dict=feed_dict)
                         test_err += err[0]
                     test_err = test_err / float(N_test)
-                    logging.info("Test error %f" % test_err)
+                    logging.info("Test error %f\n" % test_err)
                     feed_dict[dispnet.test_error] = test_err
 
         except tf.errors.OutOfRangeError:
-            logging.INFO('Done training for %d epochs, %d steps.' % (FLAGS.num_epochs, step))
+            logging.INFO('Done training for %d epochs, %d steps.\n' % (FLAGS.num_epochs, step))
 
         finally:
             coord.request_stop()
