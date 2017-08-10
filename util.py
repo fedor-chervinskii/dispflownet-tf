@@ -37,7 +37,7 @@ def readPFM(file):
         endian = '>' # big-endian
 
     data = np.fromfile(file, endian + 'f')
-    shape = (height, width, 3) if color else (height, width)
+    shape = (height, width, 3) if color else (height, width,1)
 
     data = np.reshape(data, shape)
     data = np.flipud(data)
@@ -59,22 +59,18 @@ def ft3d_filenames(path):
     ft3d_samples_filenames['PFM']=True
     return ft3d_samples_filenames
 
-def trainingLists_conf(filenames_train, filenames_test):
-    assert len(filenames_train)==4
-    assert len(filenames_train)==4
+def trainingLists_conf(filename_train, filename_test):
+    for f in [filename_train,filename_test]:
+        if not os.path.exists(f):
+            raise Exception('File not found: {}'.format(f)) 
     dataset={}
-   
-    for label,filename in zip(['TRAIN','TEST'],[filenames_train,filenames_test]):
-        samples=[]
-        for f in filename:
-            if (f is not None) and (not os.path.exists(f)):
-                raise Exception('File not found: {}'.format(f))
-            s =[l.strip() for l in f.readlines()]
-            samples.append(s)
-        
-        dataset[label]=[(l,r,d,c) for l,r,d,c in zip(samples[0],samples[1],samples[2],samples[3])] 
+    for label,filename in zip(['TRAIN','TEST'],[filename_train,filename_test]):
+        with open(filename) as f:
+            lines=[l.strip() for l in f.readlines()]
+        dataset[label]=[l.split(';') for l in lines] 
 
     dataset['PFM']=(dataset['TRAIN'][0][2].split('.')[-1]=='pfm')
+    return dataset
 
 def init_logger(log_path, name="dispnet"):
     root = logging.getLogger()

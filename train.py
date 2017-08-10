@@ -6,7 +6,7 @@ import argparse
 import numpy as np
 import tensorflow as tf
 from dispnet import DispNet
-from util import init_logger, ft3d_filenames
+from util import init_logger, trainingLists_conf
 from tensorflow.python.client import timeline
 
 CORR = True
@@ -14,28 +14,23 @@ CORR = True
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("-d", "--data_path", dest="dataset_path", required=True, type=str,
-                        metavar="FILE", help='path to a folder containing the setup fails for train and test')
-    parser.add_argument("-c", "--ckpt", dest="checkpoint_path", default=".", type=str,
-                        metavar="FILE", help='model checkpoint path')
-    parser.add_argument("-b", "--batch_size", dest="batch_size", default=4, type=int,
-                        help='batch size')
-    parser.add_argument("-l", "--log_step", dest="log_step", type=int, default=100,
-                        help='log step size')
-    parser.add_argument("-s", "--save_step", dest="save_step", type=int, default=5000,
-                        help='save checkpoint step size')
-    parser.add_argument("-n", "--n_steps", dest="n_steps", type=int, default=None,
-                        help='test steps')
-    parser.add_argument("--corr_type", dest="corr_type", type=str, default="tf",
-                        help="correlation layer realization - 'tf' or 'cuda'")
+    parser.add_argument("--training", dest="training", required=True, type=str,metavar="FILE", help='path to the training list file')
+    parser.add_argument("--testing",dest='testing',required=True,type=str,metavar='FILE',help="path to the test list file")
+    parser.add_argument("-c", "--ckpt", dest="checkpoint_path", default=".", type=str,metavar="FILE", help='model checkpoint path')
+    parser.add_argument("-b", "--batch_size", dest="batch_size", default=4, type=int,help='batch size')
+    parser.add_argument("-l", "--log_step", dest="log_step", type=int, default=100,help='log step size')
+    parser.add_argument("-s", "--save_step", dest="save_step", type=int, default=1000,help='save checkpoint step size')
+    parser.add_argument("-n", "--n_steps", dest="n_steps", type=int, default=500000,help='number of training steps')
+    parser.add_argument("--corr_type", dest="corr_type", type=str, default="tf",help="correlation layer realization",choices=['tf','cuda'])
+    parser.add_argument("-th","--confidence_th",dest="confidence_th",type=int, default="0", help="threshold to be applied on the confidence to mask out values")
+    parser.add_argument("--smooth",type=float,default=0,help="smoothness lambda to be used for l1 regularization")
 
     args = parser.parse_args()
     
-    ft3d_dataset = ft3d_filenames(args.dataset_path)
+    dataset = trainingLists_conf(args.training,args.testing)
 
     tf.logging.set_verbosity(tf.logging.ERROR)
-    dispnet = DispNet(mode="traintest", ckpt_path=args.checkpoint_path, dataset=ft3d_dataset,
-                      batch_size=args.batch_size, is_corr=CORR, corr_type="cuda")
+    dispnet = DispNet(mode="traintest", ckpt_path=args.checkpoint_path, dataset=dataset,batch_size=args.batch_size, is_corr=CORR, corr_type=args.corr_type,smoothness_lambda=args.smooth,confidence_th=args.confidence_th)
 
     ckpt = tf.train.latest_checkpoint(args.checkpoint_path)
     if not ckpt:
@@ -75,11 +70,8 @@ if __name__ == '__main__':
         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
         logging.debug("queue runners started\n")
         try:
-            feed_dict = {}
-            feed_dict[dispnet.training_mode] = True
+            #feed_dict[dispnet.training_mode] = True
             l_mean = 0
-            start = time.time()
-            feed_dict[dispnet.test_error] = None
             ckpt = tf.train.latest_checkpoint(args.checkpoint_path)
             if ckpt:
                 logging.info("Restoring from %s\n" % ckpt)
@@ -88,10 +80,14 @@ if __name__ == '__main__':
                 logging.info("step: %d\n" % step)
             else:
                 step = 0
-            schedule_current = min(step // schedule_step, len(weights_schedule)-1)
-            feed_dict[dispnet.loss_weights] = np.array(weights_schedule[schedule_current])
-            feed_dict[dispnet.learning_rate] = lr_schedule[schedule_current]
-            while step < 5e5:
+
+            last_error = 1000
+            while step < args.n_steps:
+                schedule_current = min(step // schedule_step, len(weights_schedule) - 1)
+                feed_dict = {}
+                feed_dict[dispnet.loss_weights] = np.array(weights_schedule[schedule_current])
+                feed_dict[dispnet.learning_rate] = lr_schedule[schedule_current]
+                feed_dict[dispnet.test_error] = last_error
                 if step % schedule_step == 0:
                     schedule_current = min(step // schedule_step, len(weights_schedule)-1)
                     feed_dict[dispnet.loss_weights] = np.array(weights_schedule[schedule_current])
@@ -99,33 +95,32 @@ if __name__ == '__main__':
                     logging.info("iter: %d, switching weights:" % step)
                     logging.info(str(feed_dict[dispnet.loss_weights])+'\n')
                     logging.info("learning rate: %f\n" % feed_dict[dispnet.learning_rate])
-                _, l, err = sess.run([dispnet.train_step, dispnet.loss, dispnet.error],feed_dict=feed_dict)
+                
+                start = time.time()
+                _, l, err = sess.run([dispnet.train_step, dispnet.loss, dispnet.train_error],feed_dict=feed_dict)
+                end = time.time()
                 l_mean += l
                 step += 1
+                if step % test_step == 0:
+                    test_err = 0
+                    logging.info("Testing...\n")
+                    for j in range(N_test):
+                        err = sess.run([dispnet.test_error])
+                        test_err += err[0]
+                    test_err = test_err / float(N_test)
+                    logging.info("Test error %f\n" % test_err)
+                    last_error = test_err
+
                 if step % log_step == 0:
                     l_mean = np.array(l_mean / float(log_step))
                     feed_dict[dispnet.mean_loss] = l_mean
                     s = sess.run(dispnet.merged_summary, feed_dict=feed_dict)
                     writer.add_summary(s, step)
-                    logging.debug("iter: %d, f/b pass time: %f, loss: %f, error %f\n" %
-                                  (step, ((time.time() - start) / float(log_step)), l_mean, err))
+                    logging.debug("iter: %d, f/b pass time: %f, loss: %f, error %f\n" %(step, ((end - start) / float(log_step)), l_mean, err))
                     l_mean = 0
-                    start = time.time()
                 if step % save_step == 0:
-                    logging.info("saving to file %s.\n" % 
-                                 (os.path.join(args.checkpoint_path, MODEL_NAME)))
-                    dispnet.saver.save(sess, os.path.join(args.checkpoint_path, MODEL_NAME),
-                                       global_step=step)
-                if step % test_step == 0:
-                    test_err = 0
-                    feed_dict[dispnet.training_mode] = False
-                    logging.info("Testing...\n")
-                    for j in range(N_test):
-                        err = sess.run([dispnet.error], feed_dict=feed_dict)
-                        test_err += err[0]
-                    test_err = test_err / float(N_test)
-                    logging.info("Test error %f\n" % test_err)
-                    feed_dict[dispnet.test_error] = test_err
+                    logging.info("saving to file %s.\n" % (os.path.join(args.checkpoint_path, MODEL_NAME)))
+                    dispnet.saver.save(sess, os.path.join(args.checkpoint_path, MODEL_NAME),global_step=step)
 
         except tf.errors.OutOfRangeError:
             logging.INFO('Done training for %d epochs, %d steps.\n' % (FLAGS.num_epochs, step))

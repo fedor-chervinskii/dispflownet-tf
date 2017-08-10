@@ -14,15 +14,15 @@ REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 shift_corr_module = tf.load_op_library(os.path.join(REPO_DIR, 'user_ops/shift_corr.so'))
 
 
-def correlation(x, y, max_disp):
+def correlation(x, y, max_disp, is_train=True):
     x = tf.pad(x, [[0, 0], [0, 0], [max_disp, max_disp], [0, 0]], "CONSTANT")
     y = tf.pad(y, [[0, 0], [0, 0], [max_disp, max_disp], [0, 0]], "CONSTANT")
     corr = shift_corr_module.shift_corr(x, y, max_disp=max_disp)
 
-    @tf.RegisterGradient("ShiftCorr")
-    def _ShiftCorrOpGrad(op, grad):
-        return shift_corr_module.shift_corr_grad(op.inputs[0], op.inputs[1],
-                                                 grad, max_disp=max_disp)
+    if is_train:
+        @tf.RegisterGradient("ShiftCorr")
+        def _ShiftCorrOpGrad(op, grad):
+            return shift_corr_module.shift_corr_grad(op.inputs[0], op.inputs[1],grad, max_disp=max_disp)
 
     return tf.transpose(corr, perm=[0, 2, 3, 1])
 
@@ -43,9 +43,10 @@ def correlation_map(x, y, max_disp):
                         perm=[1, 2, 3, 0])
 
 
-def preprocess(left_img, right_img, target, conf, input_size, augmentation=False):
+def preprocess(left_img, right_img, target_img, conf_img, input_size, augmentation=False,conf_th=0):
     left_img = tf.image.convert_image_dtype(left_img, tf.float32)
     right_img = tf.image.convert_image_dtype(right_img, tf.float32)
+    conf_img = tf.image.convert_image_dtype(conf_img,tf.float32)
     mean = MEAN_VALUE / 255.
     height, width, n_channels = input_size
     orig_width = tf.shape(left_img)[1]
@@ -64,8 +65,11 @@ def preprocess(left_img, right_img, target, conf, input_size, augmentation=False
 
     left_img.set_shape([height, width, n_channels])
     right_img.set_shape([height, width, n_channels])
-    target.set_shape([height, width, 1])
-    conf.set_shape([height,width,1])
+    target = tf.reshape(target[:,:,0],[height, width, 1])
+    conf  = tf.reshape(conf[:,:,0],[height,width,1])
+    
+    #mask out value below confidence
+    conf_img = tf.where(conf_img>conf_th,conf_img,0)
 
     #target should be multiplied by -1?
     target=-target
@@ -74,7 +78,7 @@ def preprocess(left_img, right_img, target, conf, input_size, augmentation=False
         active = tf.random_uniform(shape=[5],minval=0,maxval=1,dtype=tf.float32)
         #random gamma
         random_gamma = tf.random_uniform(shape=(),minval=0.8,maxval=1.2,dtype=tf.float32)
-        left_img = tf.where(active[0]>0.5,left_img,tf.image.adjust_gamma(images,random_gamma))
+        left_img = tf.where(active[0]>0.5,left_img,tf.image.adjust_gamma(left_img,random_gamma))
         right_img = tf.where(active[0]>0.5,right_img,tf.image.adjust_gamma(right_img,random_gamma))
 
         #random brightness
@@ -93,8 +97,12 @@ def preprocess(left_img, right_img, target, conf, input_size, augmentation=False
         right_img = tf.where(active[3]>0.5,right_img,tf.image.adjust_hue(right_img,random_hue))
 
         #random_flip_left_right --> swap left and right image if they are flipped
+        temp = left_img
         left_img = tf.where(active[4]>0.5,left_img,tf.image.flip_left_right(right_img))
-        right_img = tf.where(active[4]>0.5,right_img,tf.image.flip_left_right(left_img))
+        right_img = tf.where(active[4]>0.5,right_img,tf.image.flip_left_right(temp))
+    
+    left_img = tf.clip_by_value(left_img,-0.5,0.5)
+    right_img = tf.clip_by_value(right_img,-0.5,0.5)
 
     return left_img, right_img, target, conf
 
@@ -112,15 +120,16 @@ def read_sample(filename_queue, pfm_target=True):
     return left_img, right_img, target, conf
 
 
-def input_pipeline(filenames, input_size, batch_size, num_epochs=None, pfm_target=True,train=True):
-    filename_queue = tf.train.input_producer(filenames, element_shape=[3], num_epochs=num_epochs, shuffle=True)
-    left_img, right_img, target,conf = read_sample(filename_queue,pfm_target=pfm_target)
-    left_img, right_img, target,conf = preprocess(left_img, right_img, target, conf, input_size,augmentation=train)
+def input_pipeline(filenames, input_size, batch_size, num_epochs=None, pfm_target=True,train=True,conf_th=0):
+    filename_queue = tf.train.input_producer(filenames, element_shape=[4], num_epochs=num_epochs, shuffle=True)
+    left_img, right_img, target, conf = read_sample(filename_queue,pfm_target=pfm_target)
+    left_img, right_img, target, conf = preprocess(left_img, right_img, target, conf, input_size,augmentation=train,conf_th=conf_th)
     min_after_dequeue = 100
     capacity = min_after_dequeue + 3 * batch_size
     left_img_batch, right_img_batch, target_batch, conf_batch = tf.train.shuffle_batch(
         [left_img, right_img, target, conf], batch_size=batch_size, capacity=capacity,
         min_after_dequeue=min_after_dequeue,num_threads=8)
+    
     return left_img_batch, right_img_batch, target_batch,conf_batch
 
 
@@ -174,7 +183,7 @@ def upsampling_block(bottom, skip_connection, input_channels, output_channels, s
     return concat, predict
 
 
-def build_main_graph(left_image_batch, right_image_batch, is_corr=True, corr_type="tf"):
+def build_main_graph(left_image_batch, right_image_batch, is_corr=True, corr_type="tf",is_train=True):
     if is_corr:
         with tf.variable_scope("conv1") as scope:
             conv1a = conv2d(left_image_batch, [7, 7, 3, 64], strides=2)
@@ -190,7 +199,7 @@ def build_main_graph(left_image_batch, right_image_batch, is_corr=True, corr_typ
             if corr_type == "tf":
                 corr = correlation_map(conv2a, conv2b, max_disp=MAX_DISP)
             else:
-                corr = correlation(conv2a, conv2b, max_disp=MAX_DISP)
+                corr = correlation(conv2a, conv2b, max_disp=MAX_DISP,is_train=is_train)
         with tf.variable_scope("conv3"):
             conv3 = conv2d(tf.concat([corr, conv_redir], axis=3),
                            [5, 5, MAX_DISP*2 + 1 + 64, 256], strides=2)
@@ -252,9 +261,9 @@ def build_loss(predictions, target, loss_weights, weight_decay, conf_batch=[], s
             tf.summary.scalar('loss_weight' + str(i), loss_weights[i])
         
         #smoothness
-        final_prediction = predictions[6]
+        final_prediction = predictions[5]
         _,p_height,p_width,_ = final_prediction.shape
-        diff_vert = tf.reduce_mean(tf.abs(final_prediciton[:,0:p_height-1,:,:]-final_prediction[:,1:,:,:]))
+        diff_vert = tf.reduce_mean(tf.abs(final_prediction[:,0:p_height-1,:,:]-final_prediction[:,1:,:,:]))
         diff_hor = tf.reduce_mean(tf.abs(final_prediction[:,:,0:p_width-1,:]-final_prediction[:,:,1:,:]))
         mean_error = diff_vert*2+diff_hor*2
 
@@ -267,8 +276,7 @@ def build_loss(predictions, target, loss_weights, weight_decay, conf_batch=[], s
 
 
 class DispNet(object):
-    def __init__(self, mode="inference", ckpt_path=".", dataset=None,
-                 input_size=INPUT_SIZE, batch_size=4, is_corr=True, corr_type="tf", smoothness_lambda=0):
+    def __init__(self, mode="inference", ckpt_path=".", dataset=None,input_size=INPUT_SIZE, batch_size=4, is_corr=True, corr_type="tf", smoothness_lambda=0, confidence_th=0):
         self.ckpt_path = ckpt_path
         self.input_size = input_size
         self.batch_size = batch_size
@@ -276,63 +284,69 @@ class DispNet(object):
         self.corr_type = corr_type
         self.dataset = dataset
         self.mode = mode
-        self.smoothness_lambda=0
+        self.smoothness_lambda=smoothness_lambda
+        self.confidence_th=confidence_th
         self.create_graph()
 
     def create_graph(self):
         self.graph = tf.Graph()
         with self.graph.as_default():
-            self.loss_weights = tf.placeholder(tf.float32, shape=(6),
-                                               name="loss_weights")
+            self.loss_weights = tf.placeholder(tf.float32, shape=(6),name="loss_weights")
             self.learning_rate = tf.placeholder(tf.float32, shape=(), name="learning_rate")
             weight_decay = tf.placeholder_with_default(shape=(), name='weight_decay', input=0.0004)
             beta1 = tf.placeholder_with_default(shape=(), name="beta1", input=0.9)
             beta2 = tf.placeholder_with_default(shape=(), name="beta2", input=0.99)
 
             if self.mode == "traintest":
-                train_pipeline = input_pipeline(self.dataset["TRAIN"], input_size=self.input_size,
-                                                batch_size=self.batch_size,pfm_target=self.dataset['PFM'],train=True)
-                val_pipeline = input_pipeline(self.dataset["TEST"], input_size=self.input_size,
-                                              batch_size=self.batch_size,pfm_target=self.dataset['PFM'],train=False)
-                self.training_mode = tf.placeholder_with_default(shape=(), input=True,
-                                                                 name="training_mode")
-                self.inputs = tf.cond(self.training_mode,
-                                      lambda: train_pipeline,
-                                      lambda: val_pipeline)
-            elif self.mode == "test":
+                train_pipeline = input_pipeline(self.dataset["TRAIN"], input_size=self.input_size,batch_size=self.batch_size,pfm_target=self.dataset['PFM'],train=True)
+                val_pipeline = input_pipeline(self.dataset["TEST"], input_size=self.input_size,batch_size=self.batch_size,pfm_target=self.dataset['PFM'],train=False)
+
+                with tf.variable_scope('model') as scope:
+                    left_image_batch, right_image_batch, target, conf_batch = train_pipeline
+                    self.predictions_train = build_main_graph(left_image_batch, right_image_batch, is_corr=self.is_corr, corr_type=self.corr_type)
+
+                    scope.reuse_variables()
+
+                    left_image_test_batch, right_image_test_batch, target_test, _ = val_pipeline
+                    self.predictions_test = build_main_graph(left_image_test_batch, right_image_test_batch, is_corr=self.is_corr, corr_type=self.corr_type,is_train=False)
+
+                self.total_loss, self.loss, self.train_error = build_loss(self.predictions_train, target,
+                                                                    self.loss_weights,
+                                                                    weight_decay, conf_batch=conf_batch, smoothness_lambda=self.smoothness_lambda)
+                #validation error                                                    
+                target_rescaled = tf.image.resize_nearest_neighbor(target_test, [target_test.shape[1].value//2, target_test.shape[2].value//2])
+                self.test_error = tf.reduce_mean(tf.abs(self.predictions_test[0]-target_rescaled))
+
+                #summary ops
+                tf.summary.scalar('train_error', self.train_error)
+                tf.summary.image("left", left_image_batch, max_outputs=1)
+                tf.summary.image("right", right_image_batch, max_outputs=1)
+                for i in range(6):
+                    tf.summary.image("disp" + str(i), self.predictions_train[i], max_outputs=1)
+                tf.summary.image("disp0_gt", target, max_outputs=1)
+                tf.summary.image("conf0", conf_batch, max_outputs=1)
+
+                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate,beta1=beta1, beta2=beta2)
+                self.train_step = optimizer.minimize(self.total_loss)
+                self.mean_loss = tf.placeholder(tf.float32)
+                tf.summary.scalar('mean_loss', self.mean_loss)
+
+            elif self.variable_scope == "test":
                 test_pipeline = input_pipeline(self.dataset["TEST"], input_size=self.input_size,
                                                batch_size=self.batch_size,pfm_target=self.dataset['PFM'],train=False)
-                self.inputs = test_pipeline
-            elif self.mode == "inference":
+                with tf.scope('model') as scope:
+                    left_image_batch, right_image_batch, target, _ = test_pipeline
+                    self.predictions_test= build_main_graph(left_image_batch, right_image_batch, is_corr=self.is_corr, corr_type=self.corr_type)
+            elif self.variable_scope == "inference":
                 h, w, c = input_size
-                self.inputs = (tf.placeholder(tf.float32, shape=(1, h, w, c), name="left_img"),
-                               tf.placeholder(tf.float32, shape=(1, h, w, c), name="right_img"),
-                               tf.placeholder_with_default(tf.float32, shape=(1, h, w, 1),
-                                                           name="disp_gt",
-                                                           input=tf.zeros(shape=(1, h, w, 1),
-                                                                          dtype=tf.float32)))
+                left_image_batch = tf.placeholder(tf.float32, shape=(1, h, w, c), name="left_img")
+                right_image_batch = tf.placeholder(tf.float32, shape=(1, h, w, c), name="right_img")
+                with tf.scope('model') as scope:
+                    self.predictions_test=build_main_graph(left_image_batch, right_image_batch, is_corr = self.is_corr, corr_type = self.corr_type)
+                
 
-            left_image_batch, right_image_batch, target, conf_batch = self.inputs
-            self.predictions = build_main_graph(left_image_batch, right_image_batch,
-                                                is_corr=self.is_corr, corr_type=self.corr_type)
-            self.total_loss, self.loss, self.error = build_loss(self.predictions, target, 
-                                                                self.loss_weights,
-                                                                weight_decay,conf_batch=conf_batch,smoothness_lambda=self.smoothness_lambda)
-            tf.summary.scalar('error', self.error)
-            tf.summary.image("left", left_image_batch,max_outputs=1)
-            tf.summary.image("right", right_image_batch,max_outputs=1)
-            for i in range(6):
-                tf.summary.image("disp" + str(i),self.predictions[i],max_outputs=1)
-            tf.summary.image("disp0_gt",target,max_outputs=1)
+            self.init = tf.group(tf.global_variables_initializer(),tf.local_variables_initializer())
 
-            optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
-                                               beta1=beta1, beta2=beta2)
-            self.train_step = optimizer.minimize(self.total_loss)
-
-            self.init = tf.group(tf.global_variables_initializer(),
-                                 tf.local_variables_initializer())
-            self.mean_loss = tf.placeholder(tf.float32)
-            tf.summary.scalar('mean_loss', self.mean_loss)
             self.test_error = tf.placeholder(tf.float32)
             tf.summary.scalar('test_error', self.test_error)
             self.merged_summary = tf.summary.merge_all()
