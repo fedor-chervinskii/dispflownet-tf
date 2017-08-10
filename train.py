@@ -15,7 +15,7 @@ CORR = True
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--data_path", dest="dataset_path", required=True, type=str,
-                        metavar="FILE", help='path to FlyingThings3D dataset')
+                        metavar="FILE", help='path to a folder containing the setup fails for train and test')
     parser.add_argument("-c", "--ckpt", dest="checkpoint_path", default=".", type=str,
                         metavar="FILE", help='model checkpoint path')
     parser.add_argument("-b", "--batch_size", dest="batch_size", default=4, type=int,

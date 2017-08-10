@@ -56,7 +56,25 @@ def ft3d_filenames(path):
         ft3d_samples_filenames[prefix] = [(left_images_filenames[i],
                                            right_images_filenames[i],
                                            disparity_filenames[i]) for i in range(len(left_images_filenames))]
+    ft3d_samples_filenames['PFM']=True
     return ft3d_samples_filenames
+
+def trainingLists_conf(filenames_train, filenames_test):
+    assert len(filenames_train)==4
+    assert len(filenames_train)==4
+    dataset={}
+   
+    for label,filename in zip(['TRAIN','TEST'],[filenames_train,filenames_test]):
+        samples=[]
+        for f in filename:
+            if (f is not None) and (not os.path.exists(f)):
+                raise Exception('File not found: {}'.format(f))
+            s =[l.strip() for l in f.readlines()]
+            samples.append(s)
+        
+        dataset[label]=[(l,r,d,c) for l,r,d,c in zip(samples[0],samples[1],samples[2],samples[3])] 
+
+    dataset['PFM']=(dataset['TRAIN'][0][2].split('.')[-1]=='pfm')
 
 def init_logger(log_path, name="dispnet"):
     root = logging.getLogger()
