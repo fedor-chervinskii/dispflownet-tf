@@ -5,6 +5,37 @@ import glob
 import logging
 import datetime
 import numpy as np
+import tensorflow as tf
+
+def get_var_to_restore_list(ckpt_path, mask=[], prefix=""):
+	"""
+	Get all the variable defined in a ckpt file and add them to the returned var_to_restore list. Allows for partially defined model to be restored fomr ckpt files.
+	Args:
+		ckpt_path: path to the ckpt model to be restored
+		mask: list of layers to skip
+		prefix: prefix string before the actual layer name in the graph definition
+	"""
+	variables = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
+	variables_dict = {}
+	for v in variables:
+		name = v.name[:-2]
+		skip = False
+		#check for skip
+		for m in mask:
+			if m in name:
+				skip = True
+				continue
+		if not skip:
+			variables_dict[v.name[:-2]] = v
+	#print(variables_dict)
+	reader = tf.train.NewCheckpointReader(ckpt_path)
+	var_to_shape_map = reader.get_variable_to_shape_map()
+	var_to_restore = {}
+	for key in var_to_shape_map:
+		#print(key)
+		if prefix + key in variables_dict.keys():
+			var_to_restore[key] = variables_dict[prefix + key]
+	return var_to_restore
 
 def readPFM(file):
     file = open(file, 'rb')

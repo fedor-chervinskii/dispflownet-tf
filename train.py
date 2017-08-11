@@ -6,22 +6,20 @@ import argparse
 import numpy as np
 import tensorflow as tf
 from dispnet import DispNet
-from util import init_logger, trainingLists_conf
+from util import init_logger, trainingLists_conf,get_var_to_restore_list
 from tensorflow.python.client import timeline
-
-CORR = True
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--training", dest="training", required=True, type=str,metavar="FILE", help='path to the training list file')
     parser.add_argument("--testing",dest='testing',required=True,type=str,metavar='FILE',help="path to the test list file")
-    parser.add_argument("-c", "--ckpt", dest="checkpoint_path", default=".", type=str,metavar="FILE", help='model checkpoint path')
+    parser.add_argument("-c", "--ckpt", dest="checkpoint_path", default=".", type=str, help='model checkpoint path')
     parser.add_argument("-b", "--batch_size", dest="batch_size", default=4, type=int,help='batch size')
     parser.add_argument("-l", "--log_step", dest="log_step", type=int, default=100,help='log step size')
+    parser.add_argument("-w", "--weights", dest="weights", help="preinitialization weights", metavar="FILE",default=None)
     parser.add_argument("-s", "--save_step", dest="save_step", type=int, default=1000,help='save checkpoint step size')
     parser.add_argument("-n", "--n_steps", dest="n_steps", type=int, default=500000,help='number of training steps')
-    parser.add_argument("--corr_type", dest="corr_type", type=str, default="tf",help="correlation layer realization",choices=['tf','cuda'])
+    parser.add_argument("--corr_type", dest="corr_type", type=str, default="tf",help="correlation layer realization",choices=['tf','cuda','none'])
     parser.add_argument("-th","--confidence_th",dest="confidence_th",type=int, default="0", help="threshold to be applied on the confidence to mask out values")
     parser.add_argument("--smooth",type=float,default=0,help="smoothness lambda to be used for l1 regularization")
 
@@ -30,26 +28,27 @@ if __name__ == '__main__':
     dataset = trainingLists_conf(args.training,args.testing)
 
     tf.logging.set_verbosity(tf.logging.ERROR)
-    dispnet = DispNet(mode="traintest", ckpt_path=args.checkpoint_path, dataset=dataset,batch_size=args.batch_size, is_corr=CORR, corr_type=args.corr_type,smoothness_lambda=args.smooth,confidence_th=args.confidence_th)
+    is_corr = args.corr_type!='none'
+    dispnet = DispNet(mode="traintest", ckpt_path=args.checkpoint_path, dataset=dataset,batch_size=args.batch_size, is_corr=is_corr, corr_type=args.corr_type,smoothness_lambda=args.smooth,confidence_th=args.confidence_th)
 
-    ckpt = tf.train.latest_checkpoint(args.checkpoint_path)
-    if not ckpt:
-        if not os.path.exists(args.checkpoint_path):
-            os.mkdir(args.checkpoint_path)
+
+    if not os.path.exists(args.checkpoint_path):
+        os.mkdir(args.checkpoint_path)
     model_name = "DispNet"
-    if CORR:
+    if is_corr:
         model_name += "Corr1D"
     init_logger(args.checkpoint_path, name=model_name)
     writer = tf.summary.FileWriter(args.checkpoint_path)
 
     schedule_step = 50000
-    weights_schedule = [[0., 0., 0., 0., .2, 1.],
-                        [0., 0., 0., .2, 1., .5],
-                        [0., 0., .2, 1., .5, 0.],
-                        [0., .2, 1., .5, 0., 0.],
-                        [.2, 1., .5, 0., 0., 0.],
-                        [1., .5, 0., 0., 0., 0.],
-                        [1., 0., 0., 0., 0., 0.]]
+    # weights_schedule = [[0., 0., 0., 0., .2, 1.],
+    #                     [0., 0., 0., .2, 1., .5],
+    #                     [0., 0., .2, 1., .5, 0.],
+    #                     [0., .2, 1., .5, 0., 0.],
+    #                     [.2, 1., .5, 0., 0., 0.],
+    #                     [1., .5, 0., 0., 0., 0.],
+    #                     [1., 0., 0., 0., 0., 0.]]
+    weights_schedule = [[1.,0.,0.,0.,0.,0.]]
     lr_schedule = [1e-4] * 5
     for i in range(20):
         lr_schedule.extend([(lr_schedule[-1] / 2.)] * 3)
@@ -62,16 +61,15 @@ if __name__ == '__main__':
     gpu_options = tf.GPUOptions(allow_growth=True)
 #    options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
 #    run_metadata = tf.RunMetadata()
-    with tf.Session(graph=dispnet.graph, config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+    with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
         sess.run(dispnet.init)
         logging.debug("initialized\n")
-        writer.add_graph(sess.graph)
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
         logging.debug("queue runners started\n")
         try:
-            #feed_dict[dispnet.training_mode] = True
             l_mean = 0
+
             ckpt = tf.train.latest_checkpoint(args.checkpoint_path)
             if ckpt:
                 logging.info("Restoring from %s\n" % ckpt)
@@ -80,6 +78,13 @@ if __name__ == '__main__':
                 logging.info("step: %d\n" % step)
             else:
                 step = 0
+                #restore preinitialization weights if present
+                if args.weights is not None:
+                    var_to_restore = get_var_to_restore_list(args.weights, [], prefix="model/")
+                    print('Found {} variables to restore'.format(len(var_to_restore)))
+                    restorer = tf.train.Saver(var_list=var_to_restore)
+                    restorer.restore(sess, args.weights)
+                    print('Weights restored')
 
             last_error = 1000
             while step < args.n_steps:
