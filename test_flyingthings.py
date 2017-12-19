@@ -13,20 +13,20 @@ INPUT_SIZE = (384, 768, 3)
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--data_path", dest="dataset_path", required=True, type=str,
-            metavar="FILE", help='path to FlyingThings3D dataset')
+                        metavar="FILE", help='path to FlyingThings3D dataset')
     parser.add_argument("-c", "--ckpt", dest="checkpoint_path", required=True, type=str,
-            metavar="FILE", help='model checkpoint path')
+                        metavar="FILE", help='model checkpoint path')
     parser.add_argument("-l", "--log_step", dest="log_step", type=int, default=100,
-            help='log step size')
+                        help='log step size')
     parser.add_argument("-b", "--batch_size", dest="batch_size", default=4, type=int,
                         help='batch size')
     parser.add_argument("-n", "--n_steps", dest="n_steps", type=int, default=None,
-            help='test steps')
+                        help='test steps')
     parser.add_argument("--corr_type", dest="corr_type", type=str, default="tf",
-            help="correlation layer realization - 'tf' or 'cuda'")
-    
+                        help="correlation layer realization - 'tf' or 'cuda'")
+
     args = parser.parse_args()
-    
+
     ft3d_dataset = ft3d_filenames(args.dataset_path)
 
     tf.logging.set_verbosity(tf.logging.ERROR)
@@ -70,7 +70,8 @@ if __name__ == '__main__':
             logging.info("Test error %f" % test_err)
 
         except tf.errors.OutOfRangeError:
-            logging.INFO('Done training for %d epochs, %d steps.' % (FLAGS.num_epochs, step))
+            logging.INFO('Done training for %d epochs, %d steps.' %
+                         (FLAGS.num_epochs, step))
 
         finally:
             coord.request_stop()
