@@ -31,7 +31,7 @@ if __name__ == '__main__':
                         type=int, default=1000000, help='number of training steps')
     parser.add_argument("--corr_type", dest="corr_type", type=str, default="tf",
                         help="correlation layer realization", choices=['tf', 'cuda', 'none'])
-    parser.add_argument("-th", "--confidence_th", dest="confidence_th", type=int,
+    parser.add_argument("-th", "--confidence_th", dest="confidence_th", type=float,
                         default="0", help="threshold to be applied on the confidence to mask out values")
     parser.add_argument("--smooth", type=float, default=0,
                         help="smoothness lambda to be used for l1 regularization")

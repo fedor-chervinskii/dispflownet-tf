@@ -322,7 +322,7 @@ class DispNet(object):
         self.dataset = dataset
         self.mode = mode
         self.smoothness_lambda = smoothness_lambda
-        self.confidence_th = confidence_th
+        self.confidence_th = confidence_th*255
         self.image_ops = image_ops
         self.create_graph()
 
@@ -338,9 +338,9 @@ class DispNet(object):
 
         if self.mode == "traintest":
             train_pipeline = input_pipeline(
-                self.dataset["TRAIN"], input_size=self.input_size, batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=True)
+                self.dataset["TRAIN"], input_size=self.input_size, batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=True, conf_th=self.confidence_th)
             val_pipeline = input_pipeline(self.dataset["TEST"], input_size=self.input_size,
-                                          batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=False)
+                                          batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=False, conf_th=self.confidence_th)
 
             with tf.variable_scope('model') as scope:
                 left_image_batch, right_image_batch, target, conf_batch = train_pipeline
