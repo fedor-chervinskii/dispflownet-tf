@@ -49,7 +49,7 @@ def preprocess(left_img, right_img, target_img, conf_img, input_size, augmentati
     right_img = tf.image.convert_image_dtype(right_img, tf.float32)
     conf_img = tf.image.convert_image_dtype(conf_img, tf.float32)
     target_img = tf.cast(target_img,tf.float32)
-
+    
     height, width, n_channels = input_size
     orig_width = tf.shape(left_img)[1]
     orig_height = tf.shape(left_img)[0]
@@ -72,8 +72,10 @@ def preprocess(left_img, right_img, target_img, conf_img, input_size, augmentati
     target = tf.reshape(target[:, :, 0], [height, width, 1])
     conf = tf.reshape(conf[:, :, 0], [height, width, 1])
 
-    # mask out value below confidence
-    conf = tf.where(conf > conf_th, conf, 0)
+    # mask out value below confidence 
+    #conf = tf.Print(conf,[tf.reduce_sum(tf.where(conf>conf_th)),conf_th],message='cicicici')
+    conf = tf.where(conf > conf_th, conf, tf.zeros_like(conf))
+
 
     # target should be multiplied by -1?
     target = -target
@@ -130,7 +132,7 @@ def read_sample(filename_queue, pfm_target=True):
     if pfm_target:
         target = tf.py_func(lambda x: readPFM(x)[0], [disp_fn], tf.float32)
     else:
-        target = tf.cast(tf.read_file(disp_fn),tf.float32)
+        target = tf.image.decode_image(tf.read_file(disp_fn))
     conf = tf.image.decode_image(tf.read_file(conf_fn))
     return left_img, right_img, target, conf
 
@@ -323,7 +325,7 @@ class DispNet(object):
         self.dataset = dataset
         self.mode = mode
         self.smoothness_lambda = smoothness_lambda
-        self.confidence_th = confidence_th*255
+        self.confidence_th = confidence_th
         self.image_ops = image_ops
         self.create_graph()
 
