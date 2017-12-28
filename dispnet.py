@@ -48,6 +48,7 @@ def preprocess(left_img, right_img, target_img, conf_img, input_size, augmentati
     left_img = tf.image.convert_image_dtype(left_img, tf.float32)
     right_img = tf.image.convert_image_dtype(right_img, tf.float32)
     conf_img = tf.image.convert_image_dtype(conf_img, tf.float32)
+    target_img = tf.cast(target_img,tf.float32)
 
     height, width, n_channels = input_size
     orig_width = tf.shape(left_img)[1]
@@ -72,7 +73,7 @@ def preprocess(left_img, right_img, target_img, conf_img, input_size, augmentati
     conf = tf.reshape(conf[:, :, 0], [height, width, 1])
 
     # mask out value below confidence
-    conf_img = tf.where(conf_img > conf_th, conf_img, 0)
+    conf = tf.where(conf > conf_th, conf, 0)
 
     # target should be multiplied by -1?
     target = -target
@@ -129,7 +130,7 @@ def read_sample(filename_queue, pfm_target=True):
     if pfm_target:
         target = tf.py_func(lambda x: readPFM(x)[0], [disp_fn], tf.float32)
     else:
-        target = tf.image.decode_image(tf.read_file(disp_fn))
+        target = tf.cast(tf.read_file(disp_fn),tf.float32)
     conf = tf.image.decode_image(tf.read_file(conf_fn))
     return left_img, right_img, target, conf
 
