@@ -7,7 +7,6 @@ import numpy as np
 import tensorflow as tf
 from dispnet import DispNet
 from util import init_logger, trainingLists_conf, get_var_to_restore_list
-from tensorflow.python.client import timeline
 
 MODEL_NAME = 'model.ckpt'
 
@@ -35,30 +34,40 @@ if __name__ == '__main__':
                         default="0", help="threshold to be applied on the confidence to mask out values")
     parser.add_argument("--smooth", type=float, default=0,
                         help="smoothness lambda to be used for l1 regularization")
+    parser.add_argument("--kittigt", help="flag to read gt map as 16bit png", action='store_true')
 
     args = parser.parse_args()
 
-    dataset = trainingLists_conf(args.training, args.testing)
+    dataset = trainingLists_conf(args.training, args.testing,kittiGt=args.kittigt)
 
     tf.logging.set_verbosity(tf.logging.ERROR)
     is_corr = args.corr_type != 'none'
-    dispnet = DispNet(mode="traintest", ckpt_path=args.checkpoint_path, dataset=dataset, batch_size=args.batch_size,
-                      is_corr=is_corr, corr_type=args.corr_type, smoothness_lambda=args.smooth, confidence_th=args.confidence_th)
+    dispnet = DispNet(mode="traintest", ckpt_path=args.checkpoint_path, dataset=dataset, batch_size=args.batch_size,is_corr=is_corr, corr_type=args.corr_type, smoothness_lambda=args.smooth, confidence_th=args.confidence_th)
 
     if not os.path.exists(args.checkpoint_path):
         os.mkdir(args.checkpoint_path)
     init_logger(args.checkpoint_path)
     writer = tf.summary.FileWriter(args.checkpoint_path)
 
-    schedule_step = 100000
-    weights_schedule = [[0., 0., 0., 0., .2, 1.],
-                        [0., 0., 0., .2, 1., .5],
-                        [0., 0., .2, 1., .5, 0.],
-                        [0., .2, 1., .5, 0., 0.],
-                        [.2, 1., .5, 0., 0., 0.],
-                        [1., .5, 0., 0., 0., 0.],
-                        [1., 0., 0., 0., 0., 0.]]
-    #weights_schedule = [[1.,0.,0.,0.,0.,0.]]
+    #Flying Things train
+    # schedule_step = 100000  # ORIGINAL
+    # weights_schedule = [[0., 0., 0., 0., .2, 1.],
+    #                     [0., 0., 0., .2, 1., .5],
+    #                     [0., 0., .2, 1., .5, 0.],
+    #                     [0., .2, 1., .5, 0., 0.],
+    #                     [.2, 1., .5, 0., 0., 0.],
+    #                     [1., .5, 0., 0., 0., 0.],
+    #                     [1., 0., 0., 0., 0., 0.]]
+
+    #KITTI fine-tuning
+    schedule_step = 10000 
+    weights_schedule = [[1.,0.,0.,0.,0.,0.],
+                        [1.,0.,0.,0.,0.,0.],
+                        [1.,0.,0.,0.,0.,0.],
+                        [1.,0.,0.,0.,0.,0.],
+                        [1.,0.,0.,0.,0.,0.],
+                        [1.,0.,0.,0.,0.,0.],
+                        [1.,0.,0.,0.,0.,0.]]
     lr_schedule = [1e-4] * 5
     for i in range(20):
         lr_schedule.extend([(lr_schedule[-1] / 2.)] * 3)
@@ -93,7 +102,7 @@ if __name__ == '__main__':
                 # restore preinitialization weights if present
                 if args.weights is not None:
                     var_to_restore = get_var_to_restore_list(
-                        args.weights, [], prefix="model/")
+                        args.weights, [], prefix="")
                     print('Found {} variables to restore'.format(
                         len(var_to_restore)))
                     restorer = tf.train.Saver(var_list=var_to_restore)
@@ -126,8 +135,7 @@ if __name__ == '__main__':
                     [dispnet.train_step, dispnet.loss, dispnet.train_error], feed_dict=feed_dict)
                 end = time.time()
                 l_mean += l
-                step += 1
-                if step % test_step == 0:
+                if step % test_step == 0 and step !=0:
                     test_err = 0
                     logging.info("Testing...\n")
                     for j in range(N_test):
@@ -151,10 +159,10 @@ if __name__ == '__main__':
                         os.path.join(args.checkpoint_path, MODEL_NAME)))
                     dispnet.saver.save(sess, os.path.join(
                         args.checkpoint_path, MODEL_NAME), global_step=step)
+                step += 1
 
         except tf.errors.OutOfRangeError:
-            logging.INFO('Done training for %d epochs, %d steps.\n' %
-                         (FLAGS.num_epochs, step))
+            logging.INFO('Done training for {} steps.\n'.format(step))
 
         finally:
             coord.request_stop()

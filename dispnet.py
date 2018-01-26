@@ -6,7 +6,7 @@ import os
 LEAKY_ALPHA = 0.1
 MAX_DISP = 40
 MEAN_VALUE = 100.
-INPUT_SIZE = (384, 768, 3)
+INPUT_SIZE = (320, 896, 3)
 
 initializer = tf.contrib.layers.xavier_initializer_conv2d(uniform=False)
 
@@ -124,7 +124,7 @@ def preprocess(left_img, right_img, target_img, conf_img, input_size, augmentati
     return left_img, right_img, target, conf
 
 
-def read_sample(filename_queue, pfm_target=True):
+def read_sample(filename_queue, pfm_target=True, scaled_gt=False):
     filenames = filename_queue.dequeue()
     left_fn, right_fn, disp_fn, conf_fn = filenames[0], filenames[1], filenames[2], filenames[3]
     left_img = tf.image.decode_image(tf.read_file(left_fn))
@@ -132,18 +132,19 @@ def read_sample(filename_queue, pfm_target=True):
     if pfm_target:
         target = tf.py_func(lambda x: readPFM(x)[0], [disp_fn], tf.float32)
     else:
-        target = tf.image.decode_image(tf.read_file(disp_fn))
+        read_type = tf.uint16 if scaled_gt else tf.uint8 
+        target = tf.image.decode_png(tf.read_file(disp_fn),dtype=read_type)
+        if scaled_gt:
+            target = tf.cast(target,tf.float32)
+            target = target/256.0
     conf = tf.image.decode_image(tf.read_file(conf_fn))
     return left_img, right_img, target, conf
 
 
-def input_pipeline(filenames, input_size, batch_size, num_epochs=None, pfm_target=True, train=True, conf_th=0):
-    filename_queue = tf.train.input_producer(
-        filenames, element_shape=[4], num_epochs=num_epochs, shuffle=True)
-    left_img, right_img, target, conf = read_sample(
-        filename_queue, pfm_target=pfm_target)
-    left_img, right_img, target, conf = preprocess(
-        left_img, right_img, target, conf, input_size, augmentation=train, conf_th=conf_th)
+def input_pipeline(filenames, input_size, batch_size, num_epochs=None, pfm_target=True, train=True, conf_th=0, scaledGt=False):
+    filename_queue = tf.train.input_producer(filenames, element_shape=[4], num_epochs=num_epochs, shuffle=True)
+    left_img, right_img, target, conf = read_sample(filename_queue, pfm_target=pfm_target,scaled_gt=scaledGt)
+    left_img, right_img, target, conf = preprocess(left_img, right_img, target, conf, input_size, augmentation=train, conf_th=conf_th)
     min_after_dequeue = 100
     capacity = min_after_dequeue + 3 * batch_size
     left_img_batch, right_img_batch, target_batch, conf_batch = tf.train.shuffle_batch(
@@ -277,23 +278,24 @@ def build_main_graph(left_image_batch, right_image_batch, is_corr=True, corr_typ
             predict4, predict5, predict6)
 
 
-def L1_loss(x, y, conf=1):
-    return tf.reduce_mean(conf * tf.abs(x - y))
+def L1_loss(gt, prediction, conf=1):
+    #gt 0 means no gt
+    abs_err = tf.abs(gt-prediction)
+    valid_map = tf.where(tf.equal(gt,0), tf.zeros_like(gt, dtype=tf.float32), tf.ones_like(gt, dtype=tf.float32))
+    filtered_error = abs_err*valid_map
+    return tf.reduce_sum(filtered_error)/tf.reduce_sum(valid_map) 
 
 
 def build_loss(predictions, target, loss_weights, weight_decay, conf_batch=[], smoothness_lambda=0):
     height, width = target.get_shape()[1].value, target.get_shape()[2].value
     regularizer = tf.contrib.layers.l2_regularizer(weight_decay)
     with tf.name_scope("loss"):
-        targets = [tf.image.resize_nearest_neighbor(
-            target, [height // np.power(2, n), width // np.power(2, n)]) for n in range(1, 7)]
-        confs = [tf.image.resize_nearest_neighbor(
-            conf_batch, [height // np.power(2, n), width // np.power(2, n)]) for n in range(1, 7)]
+        targets = [tf.image.resize_nearest_neighbor(target, [height // np.power(2, n), width // np.power(2, n)]) for n in range(1, 7)]
+        confs = [tf.image.resize_nearest_neighbor(conf_batch, [height // np.power(2, n), width // np.power(2, n)]) for n in range(1, 7)]
         if len(confs) == 0:
             losses = [L1_loss(targets[i], predictions[i]) for i in range(6)]
         else:
-            losses = [L1_loss(targets[i], predictions[i], confs[i])
-                      for i in range(6)]
+            losses = [L1_loss(targets[i], predictions[i], confs[i]) for i in range(6)]
         for i in range(6):
             tf.summary.scalar('loss' + str(i), losses[i])
             tf.summary.scalar('loss_weight' + str(i), loss_weights[i])
@@ -301,10 +303,8 @@ def build_loss(predictions, target, loss_weights, weight_decay, conf_batch=[], s
         # smoothness
         final_prediction = predictions[5]
         _, p_height, p_width, _ = final_prediction.shape
-        diff_vert = tf.reduce_mean(tf.abs(
-            final_prediction[:, 0:p_height - 1, :, :] - final_prediction[:, 1:, :, :]))
-        diff_hor = tf.reduce_mean(tf.abs(
-            final_prediction[:, :, 0:p_width - 1, :] - final_prediction[:, :, 1:, :]))
+        diff_vert = tf.reduce_mean(tf.abs(final_prediction[:, 0:p_height - 1, :, :] - final_prediction[:, 1:, :, :]))
+        diff_hor = tf.reduce_mean(tf.abs(final_prediction[:, :, 0:p_width - 1, :] - final_prediction[:, :, 1:, :]))
         mean_error = diff_vert * 2 + diff_hor * 2
 
         loss = tf.add_n([losses[i] * loss_weights[i] for i in range(6)])
@@ -340,10 +340,8 @@ class DispNet(object):
         beta2 = tf.placeholder_with_default(shape=(), name="beta2", input=0.99)
 
         if self.mode == "traintest":
-            train_pipeline = input_pipeline(
-                self.dataset["TRAIN"], input_size=self.input_size, batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=True, conf_th=self.confidence_th)
-            val_pipeline = input_pipeline(self.dataset["TEST"], input_size=self.input_size,
-                                          batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=False, conf_th=self.confidence_th)
+            train_pipeline = input_pipeline(self.dataset["TRAIN"], input_size=self.input_size, batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=True, conf_th=self.confidence_th, scaledGt=self.dataset['kitti_gt'])
+            val_pipeline = input_pipeline(self.dataset["TEST"], input_size=self.input_size,batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=False, conf_th=self.confidence_th, scaledGt = self.dataset['kitti_gt'])
 
             with tf.variable_scope('model') as scope:
                 left_image_batch, right_image_batch, target, conf_batch = train_pipeline
@@ -382,8 +380,7 @@ class DispNet(object):
             tf.summary.scalar('mean_loss', self.mean_loss)
 
         elif self.mode == "test":
-            test_pipeline = input_pipeline(self.dataset["TEST"], input_size=self.input_size,
-                                           batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=False)
+            test_pipeline = input_pipeline(self.dataset["TEST"], input_size=self.input_size, batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=False, scaledGt=self.dataset['kitti_gt'])
             with tf.scope('model') as scope:
                 left_image_batch, right_image_batch, target, _ = test_pipeline
                 self.predictions_test = build_main_graph(

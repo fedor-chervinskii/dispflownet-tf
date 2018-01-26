@@ -98,7 +98,7 @@ def ft3d_filenames(path):
     return ft3d_samples_filenames
 
 
-def trainingLists_conf(filename_train, filename_test):
+def trainingLists_conf(filename_train, filename_test, kittiGt=False):
     for f in [filename_train, filename_test]:
         if not os.path.exists(f):
             raise Exception('File not found: {}'.format(f))
@@ -109,6 +109,7 @@ def trainingLists_conf(filename_train, filename_test):
         dataset[label] = [l.split(';') for l in lines]
 
     dataset['PFM'] = (dataset['TRAIN'][0][2].split('.')[-1] == 'pfm')
+    dataset['kitti_gt'] = kittiGt
     return dataset
 
 
