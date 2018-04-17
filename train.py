@@ -35,10 +35,11 @@ if __name__ == '__main__':
     parser.add_argument("--smooth", type=float, default=0,
                         help="smoothness lambda to be used for l1 regularization")
     parser.add_argument("--kittigt", help="flag to read gt map as 16bit png", action='store_true')
+    parser.add_argument("--doubleConf", help="flag to read confidence as a 16 bit png",action='store_true')
 
     args = parser.parse_args()
 
-    dataset = trainingLists_conf(args.training, args.testing,kittiGt=args.kittigt)
+    dataset = trainingLists_conf(args.training, args.testing,kittiGt=args.kittigt,doublePrecisionConf=args.doubleConf)
 
     tf.logging.set_verbosity(tf.logging.ERROR)
     is_corr = args.corr_type != 'none'
@@ -68,7 +69,7 @@ if __name__ == '__main__':
                         [1.,0.,0.,0.,0.,0.],
                         [1.,0.,0.,0.,0.,0.],
                         [1.,0.,0.,0.,0.,0.]]
-    lr_schedule = [1e-4] * 5
+    lr_schedule = [1e-5] * 5
     for i in range(20):
         lr_schedule.extend([(lr_schedule[-1] / 2.)] * 3)
 

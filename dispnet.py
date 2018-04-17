@@ -73,9 +73,7 @@ def preprocess(left_img, right_img, target_img, conf_img, input_size, augmentati
     conf = tf.reshape(conf[:, :, 0], [height, width, 1])
 
     # mask out value below confidence 
-    #conf = tf.Print(conf,[tf.reduce_sum(tf.where(conf>conf_th)),conf_th],message='cicicici')
     conf = tf.where(conf > conf_th, conf, tf.zeros_like(conf))
-
 
     # target should be multiplied by -1?
     target = -target
@@ -124,7 +122,7 @@ def preprocess(left_img, right_img, target_img, conf_img, input_size, augmentati
     return left_img, right_img, target, conf
 
 
-def read_sample(filename_queue, pfm_target=True, scaled_gt=False):
+def read_sample(filename_queue, pfm_target=True, scaled_gt=False, scaledConf=False):
     filenames = filename_queue.dequeue()
     left_fn, right_fn, disp_fn, conf_fn = filenames[0], filenames[1], filenames[2], filenames[3]
     left_img = tf.image.decode_image(tf.read_file(left_fn))
@@ -137,13 +135,17 @@ def read_sample(filename_queue, pfm_target=True, scaled_gt=False):
         if scaled_gt:
             target = tf.cast(target,tf.float32)
             target = target/256.0
-    conf = tf.image.decode_image(tf.read_file(conf_fn))
+    
+    read_type = tf.uint16 if scaledConf else tf.uint8 
+    conf = tf.image.decode_png(tf.read_file(conf_fn),dtype=read_type)
+    if scaledConf:
+        conf = tf.image.convert_image_dtype(conf,tf.float32)
     return left_img, right_img, target, conf
 
 
-def input_pipeline(filenames, input_size, batch_size, num_epochs=None, pfm_target=True, train=True, conf_th=0, scaledGt=False):
+def input_pipeline(filenames, input_size, batch_size, num_epochs=None, pfm_target=True, train=True, conf_th=0, scaledGt=False, scaledConf=False):
     filename_queue = tf.train.input_producer(filenames, element_shape=[4], num_epochs=num_epochs, shuffle=True)
-    left_img, right_img, target, conf = read_sample(filename_queue, pfm_target=pfm_target,scaled_gt=scaledGt)
+    left_img, right_img, target, conf = read_sample(filename_queue, pfm_target=pfm_target,scaled_gt=scaledGt, scaledConf=scaledConf)
     left_img, right_img, target, conf = preprocess(left_img, right_img, target, conf, input_size, augmentation=train, conf_th=conf_th)
     min_after_dequeue = 100
     capacity = min_after_dequeue + 3 * batch_size
@@ -278,11 +280,15 @@ def build_main_graph(left_image_batch, right_image_batch, is_corr=True, corr_typ
             predict4, predict5, predict6)
 
 
-def L1_loss(gt, prediction, conf=1):
+def L1_loss(gt, prediction, conf=None):
     #gt 0 means no gt
     abs_err = tf.abs(gt-prediction)
-    valid_map = tf.where(tf.equal(gt,0), tf.zeros_like(gt, dtype=tf.float32), tf.ones_like(gt, dtype=tf.float32))
-    filtered_error = abs_err*valid_map
+    if conf is None:
+        valid_map = tf.where(tf.equal(gt,0), tf.zeros_like(gt, dtype=tf.float32), tf.ones_like(gt, dtype=tf.float32))
+        filtered_error = abs_err*valid_map
+    else:
+        valid_map = tf.where(tf.equal(conf,0), tf.zeros_like(conf, dtype=tf.float32), tf.ones_like(conf, dtype=tf.float32))
+        filtered_error = abs_err*conf
     return tf.reduce_sum(filtered_error)/tf.reduce_sum(valid_map) 
 
 
@@ -340,8 +346,8 @@ class DispNet(object):
         beta2 = tf.placeholder_with_default(shape=(), name="beta2", input=0.99)
 
         if self.mode == "traintest":
-            train_pipeline = input_pipeline(self.dataset["TRAIN"], input_size=self.input_size, batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=True, conf_th=self.confidence_th, scaledGt=self.dataset['kitti_gt'])
-            val_pipeline = input_pipeline(self.dataset["TEST"], input_size=self.input_size,batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=False, conf_th=self.confidence_th, scaledGt = self.dataset['kitti_gt'])
+            train_pipeline = input_pipeline(self.dataset["TRAIN"], input_size=self.input_size, batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=True, conf_th=self.confidence_th, scaledGt=self.dataset['kitti_gt'], scaledConf=self.dataset['16bit_conf'])
+            val_pipeline = input_pipeline(self.dataset["TEST"], input_size=self.input_size,batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=False, conf_th=self.confidence_th, scaledGt = self.dataset['kitti_gt'], scaledConf=self.dataset['16bit_conf'])
 
             with tf.variable_scope('model') as scope:
                 left_image_batch, right_image_batch, target, conf_batch = train_pipeline
@@ -380,7 +386,7 @@ class DispNet(object):
             tf.summary.scalar('mean_loss', self.mean_loss)
 
         elif self.mode == "test":
-            test_pipeline = input_pipeline(self.dataset["TEST"], input_size=self.input_size, batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=False, scaledGt=self.dataset['kitti_gt'])
+            test_pipeline = input_pipeline(self.dataset["TEST"], input_size=self.input_size, batch_size=self.batch_size, pfm_target=self.dataset['PFM'], train=False, scaledGt=self.dataset['kitti_gt'], scaledConf=self.dataset['16bit_conf'])
             with tf.scope('model') as scope:
                 left_image_batch, right_image_batch, target, _ = test_pipeline
                 self.predictions_test = build_main_graph(
