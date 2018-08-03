@@ -13,7 +13,7 @@ Original code thx to [@fedor-chervinskii](https://github.com/fedor-chervinskii/d
 + Add improved code for inference
 
 ## Pretrained nets
-+ Weights for Dispnet with tensorflow correlation layaer trained for 1200000 step on FlyingThings3D available [here](https://drive.google.com/open?id=1OHkH4rjHJIpd1fA_fRIFEo5q6Je79rUs) 
++ Weights for Dispnet with tensorflow correlation layaer trained for 1200000 step on FlyingThings3D available [here](https://drive.google.com/open?id=1BAxWAOghm0DTeXMQZQJuTPBCV5PtRPMt) 
 
 ## Training
 1. Create a training and validation set made of couple of left and right frames + disparities (+ confidence for UA)
