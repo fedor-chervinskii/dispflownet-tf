@@ -17,7 +17,7 @@ Original code thx to [@fedor-chervinskii](https://github.com/fedor-chervinskii/d
 
 ## Training
 1. Create a training and validation set made of couple of left and right frames + disparities (+ confidence for UA)
-2. Create a txt file with the list of training samples for your trainign set, each row on the file should contain "path_left_frame;peth_right_frame;path_ground_truth", for UA "path_left_frame;peth_right_frame;path_ground_truth;path_confidence"
+2. Create a txt file with the list of training samples for your trainign set, each row on the file should contain "path_left_frame;peth_right_frame;path_ground_truth", for UA "path_left_frame;peth_right_frame;path_disparity;path_confidence". For UA "path_disparity" is the path to the disparity map obtained by a standard, non learned, stereo algorithm (e.g.: SGM or AD-CENSUS in the paper)
 3. Train Dispnet using train.py, usage:
 ```
 python main.py --training $TRAINING_LIST --testing $TEST_LIST -c $OUT_DIR --corr_type tf 
