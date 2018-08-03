@@ -127,7 +127,6 @@ if __name__ == '__main__':
                 lefty,righty,f,ressy = sess.run([left_img,right_img,left_fn,original_resolution])
                 raw_prediction_np, full_res_prediction_np = sess.run([raw_prediction,cropped_prediction],feed_dict={left_placeholder:lefty,right_placeholder:righty,target_shape:ressy})
 
-                #modifca per usare i merdosi placeholder
                 dest = f.decode('utf-8').replace(args.left, args.output)
                 dest_folder = os.path.abspath(os.path.join(dest, os.pardir))
                 os.makedirs(dest_folder, exist_ok=True)

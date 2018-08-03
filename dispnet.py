@@ -30,18 +30,13 @@ def correlation(x, y, max_disp, is_train=True):
 def correlation_map(x, y, max_disp):
     corr_tensors = []
     y_shape = tf.shape(y)
-    for i in range(-max_disp, 0, 1):
-        shifted = tf.pad(tf.slice(y, [0] * 4, [-1, -1, y_shape[2] + i, -1]),
-                         [[0, 0], [0, 0], [-i, 0], [0, 0]], "CONSTANT")
-        corr = tf.reduce_mean(tf.multiply(shifted, x), axis=3)
-        corr_tensors.append(corr)
-    for i in range(max_disp + 1):
-        shifted = tf.pad(tf.slice(x, [0, 0, i, 0], [-1] * 4),
-                         [[0, 0], [0, 0], [0, i], [0, 0]], "CONSTANT")
-        corr = tf.reduce_mean(tf.multiply(shifted, y), axis=3)
-        corr_tensors.append(corr)
-    return tf.transpose(tf.stack(corr_tensors),
-                        perm=[1, 2, 3, 0])
+    y_feature = tf.pad(y,[[0,0],[0,0],[max_disp,max_disp],[0,0]])
+    for i in range(-max_disp, max_disp+1,1):
+        shifted = tf.slice(y_feature, [0, 0, i + max_disp, 0], [-1, y_shape[1], y_shape[2], -1])
+        corr_tensors.append(tf.reduce_mean(shifted*x, axis=-1, keepdims=True))
+
+    result = tf.concat(corr_tensors,axis=-1)
+    return result
 
 
 def preprocess(left_img, right_img, target_img, conf_img, input_size, augmentation=False, conf_th=0):
