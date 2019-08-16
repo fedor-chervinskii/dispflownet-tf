@@ -71,14 +71,14 @@ if __name__ == '__main__':
     left_raw = tf.read_file(left_fn)
     right_raw = tf.read_file(right_fn)
 
-    left_img = tf.image.decode_image(left_raw)
+    left_img = tf.image.decode_image(left_raw, channels=3)
     left_img.set_shape([None, None, 3])
     original_resolution = tf.shape(left_img)
     left_img = tf.image.convert_image_dtype(left_img, tf.float32)
     left_img = left_img - (100.0 / 255)
     left_img = pad_image(left_img)
 
-    right_img = tf.image.decode_image(right_raw)
+    right_img = tf.image.decode_image(right_raw, channels=3)
     right_img = tf.image.convert_image_dtype(right_img, tf.float32)
     right_img.set_shape([None, None, 3])
     right_img = right_img - (100.0 / 255)
